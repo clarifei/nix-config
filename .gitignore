@@ -1,0 +1,14 @@
+# nix build outputs
+/result
+/result-*
+
+# local environment
+/.direnv/
+/.env
+/.env.*
+!/.env.example
+
+# editor files
+*.swp
+*.swo
+*~

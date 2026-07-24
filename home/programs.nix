@@ -1,0 +1,95 @@
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+
+let
+  codexBinary = "codex-x86_64-unknown-linux-musl";
+  codexVersion = "0.145.0";
+  codex = pkgs.stdenvNoCC.mkDerivation {
+    pname = "codex";
+    version = codexVersion;
+
+    src = pkgs.fetchurl {
+      url = "https://github.com/openai/codex/releases/download/rust-v${codexVersion}/${codexBinary}.tar.gz";
+      hash = "sha256-v68Tybo08q12TkqRbEnPcXeuujKc8PcZ4iJ1ZvyNZio=";
+    };
+
+    dontBuild = true;
+    dontConfigure = true;
+    dontUnpack = true;
+
+    installPhase = ''
+      install -d $out/bin
+      tar -xzf $src -O ${codexBinary} > $out/bin/codex
+      chmod 755 $out/bin/codex
+    '';
+  };
+in
+{
+  home.packages = [
+    codex
+  ]
+  ++ (with pkgs; [
+    fastfetch
+    nodejs
+    pnpm
+  ]);
+
+  # allow generated configs to replace stale home manager backups
+  xdg.configFile = {
+    "fastfetch/config.jsonc".source = ./fastfetch.jsonc;
+    "foot/foot.ini".force = true;
+  };
+  home.file."${config.xdg.configHome}/starship.toml".force = true;
+
+  programs = {
+    home-manager.enable = true;
+    git = {
+      enable = true;
+      settings = {
+        init.defaultBranch = "main";
+        user = {
+          email = "nightcoremosta@gmail.com";
+          name = "Rendy Sebpian";
+        };
+      };
+    };
+    gh.enable = true;
+    firefox.enable = true;
+    fish = {
+      enable = true;
+      functions.fish_greeting = "";
+      interactiveShellInit = ''
+        set -l noctalia_terminal_sequences "$HOME/.cache/noctalia/terminal-sequences"
+        if test -r "$noctalia_terminal_sequences"
+          command cat "$noctalia_terminal_sequences"
+        end
+
+        if test "$TERM" != dumb
+          fastfetch
+        end
+      '';
+    };
+    starship = {
+      enable = true;
+      settings = builtins.fromTOML (builtins.readFile ./starship-prompt-mono.toml);
+    };
+    foot = {
+      enable = true;
+      settings = {
+        main = {
+          font = "GeistMono Nerd Font:size=11";
+          dpi-aware = "yes";
+          include = "~/.config/foot/themes/noctalia";
+          pad = "8x8";
+          shell = lib.getExe pkgs.fish;
+        };
+        scrollback.lines = 10000;
+        mouse.hide-when-typing = "yes";
+      };
+    };
+  };
+}

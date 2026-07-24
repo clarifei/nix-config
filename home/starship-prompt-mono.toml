@@ -1,0 +1,151 @@
+# source: https://github.com/anki-code/starship-prompt-mono
+# use the terminal's default foreground color
+
+format = """$username$hostname$directory$fill[$all](none)$time$line_break$character"""
+palette = "terminal"
+
+# shell interaction
+
+[character]
+success_symbol = "[@](bold)"
+error_symbol = "[@](bold)"
+
+[fill]
+symbol = ' '
+style = "none"
+
+# context modules
+
+[username]
+style_user = "none"
+style_root = "bold"
+format = "[$user]($style)"
+show_always = false
+
+[hostname]
+ssh_only = true
+style = "none"
+format = "[$hostname]($style)"
+disabled = false
+
+[directory]
+truncation_length = 4
+truncate_to_repo = true
+style = "none"
+format = "[$path]($style)"
+
+[shell]
+disabled = true
+
+# time
+
+[time]
+disabled = false
+time_format = "%F %T"
+style = "none"
+format = "[$time]($style)"
+
+# command duration
+
+[cmd_duration]
+min_time = 10000
+style = "none"
+format = "[⏱ $duration]($style)"
+
+# git modules
+
+[git_branch]
+symbol = "git "
+style = "none"
+
+# language runtimes
+
+[nodejs]
+symbol = "node "
+style = "none"
+format = "[$symbol($version )]($style)"
+
+[rust]
+symbol = "rs "
+style = "none"
+format = "[$symbol($version )]($style)"
+
+[golang]
+symbol = "go "
+style = "none"
+format = "[$symbol($version )]($style)"
+
+[python]
+symbol = "py "
+style = "none"
+format = "[$symbol($version )]($style)"
+
+# cloud and devops
+
+[aws]
+symbol = "aws "
+style = "none"
+format = "[$symbol($profile )]($style)"
+
+[gcloud]
+symbol = "gcp "
+style = "none"
+format = "[$symbol($active )]($style)"
+
+[kubernetes]
+symbol = "k8s "
+style = "none"
+format = '[$symbol\($context\)]($style)'
+
+[terraform]
+symbol = "tf "
+style = "none"
+format = "[$symbol($workspace)]($style)"
+
+# package management
+
+[package]
+symbol = "package "
+style = "none"
+format = "[$symbol$version]($style)"
+
+# system modules
+
+[jobs]
+symbol = "⚙ "
+style = "none"
+format = "[$symbol$number]($style)"
+threshold = 1
+
+[memory_usage]
+disabled = true
+
+[battery]
+disabled = true
+
+[shlvl]
+style = "none"
+format = "[$shlvl]($style)"
+threshold = 2
+
+# keep every module on the terminal's default foreground color
+
+[palettes.terminal]
+black = "none"
+red = "none"
+green = "none"
+yellow = "none"
+blue = "none"
+purple = "none"
+cyan = "none"
+white = "none"
+bright-black = "none"
+bright-red = "none"
+bright-green = "none"
+bright-yellow = "none"
+bright-blue = "none"
+bright-purple = "none"
+bright-cyan = "none"
+bright-white = "none"
+grey = "none"
+none = "none"

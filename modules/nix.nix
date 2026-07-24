@@ -1,0 +1,38 @@
+{ pkgs, ... }:
+
+{
+  # keep bwrap in the system path for sandboxed tools
+  environment.systemPackages = [ pkgs.bubblewrap ];
+
+  nix = {
+    settings = {
+      auto-optimise-store = true;
+      experimental-features = [
+        "nix-command"
+        "flakes"
+      ];
+      # limit build concurrency for 32 gib of ram
+      cores = 8;
+      max-jobs = 2;
+      extra-substituters = [
+        "https://attic.xuyh0120.win/lantian"
+        "https://noctalia.cachix.org"
+      ];
+      extra-trusted-public-keys = [
+        "lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc="
+        "noctalia.cachix.org-1:pCOR47nnMEo5thcxNDtzWpOxNFQsBRglJzxWPp3dkU4="
+      ];
+    };
+  };
+
+  nixpkgs.config.allowUnfree = true;
+
+  programs.nh = {
+    enable = true;
+    flake = "/home/clarifei/nixos-config";
+    clean = {
+      enable = true;
+      extraArgs = "--keep-since 7d --keep 5";
+    };
+  };
+}
