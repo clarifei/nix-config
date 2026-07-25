@@ -2,6 +2,7 @@
   imports = [
     ./hardware-configuration.nix
     ./modules/desktop.nix
+    ./modules/file-chooser.nix
     ./modules/home-manager.nix
     ./modules/kernel.nix
     ./modules/labwc.nix
