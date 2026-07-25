@@ -1,4 +1,9 @@
-{ config, noctalia, ... }:
+{
+  config,
+  noctalia,
+  pkgs,
+  ...
+}:
 
 let
   esc = builtins.fromJSON ''"\u001b"'';
@@ -158,7 +163,9 @@ in
 
       idle.behavior."screen-off" = {
         timeout = 600;
-        action = "screen_off";
+        action = "command";
+        command = "${pkgs.wlopm}/bin/wlopm --off '*'";
+        resume_command = "${pkgs.wlopm}/bin/wlopm --on '*'";
       };
 
       brightness = {
