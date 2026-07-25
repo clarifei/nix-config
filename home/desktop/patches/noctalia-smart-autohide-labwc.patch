@@ -1,7 +1,7 @@
 diff --git a/src/shell/bar/bar.cpp b/src/shell/bar/bar.cpp
 --- a/src/shell/bar/bar.cpp
 +++ b/src/shell/bar/bar.cpp
-@@ -70,52 +70,19 @@ namespace {
+@@ -70,52 +70,30 @@ namespace {
      return instance.barConfig.autoHide;
    }
  
@@ -56,13 +56,44 @@ diff --git a/src/shell/bar/bar.cpp b/src/shell/bar/bar.cpp
 +    // maximized or fullscreen toplevel on its own output. The layer surface
 +    // keeps its edge input strip, so moving the pointer to that edge reveals it.
 +    const auto active = platform.activeToplevel();
-+    if (!active.has_value() || platform.activeToplevelOutput() != output) {
++    if (!active.has_value()) {
++      return true;
++    }
++
++    // Labwc does not emit foreign-toplevel output_enter events. Fall back to
++    // the interactive output so a single-monitor session still maps the active
++    // toplevel to its bar, while keeping the per-output check when available.
++    wl_output* activeOutput = platform.activeToplevelOutput();
++    if (activeOutput == nullptr) {
++      activeOutput = platform.preferredInteractiveOutput();
++    }
++    if (activeOutput != nullptr && activeOutput != output) {
 +      return true;
 +    }
 +    return !active->maximized && !active->fullscreen;
    }
  
    [[nodiscard]] FontWeight parseWidgetLabelFontWeight(const WidgetConfig& config, FontWeight fallback) {
+@@ -1479,9 +1457,17 @@ void Bar::reevaluateSmartAutoHide() {
+         syncBarSurfaceChrome(*instance);
+         needsRedraw = true;
+       }
+-    } else if (!instance->pointerInside && instance->attachedPopupCount == 0 && !suppressAutoHide) {
+-      if ((instance->hideOpacity > 0.0f || pinnedChanged) && !isWorkspacePeekActive()) {
++    } else if (instance->attachedPopupCount == 0 && !suppressAutoHide) {
++      // A maximize/fullscreen transition may not produce a pointer-leave from
++      // the layer surface. Hide immediately, then leave only the edge strip
++      // available so the bar behaves like an auto-hidden taskbar.
++      if (pinnedChanged) {
++        clearInstancePointerState(*instance);
++      }
++      if ((!instance->pointerInside || pinnedChanged)
++          && (instance->hideOpacity > 0.0f || pinnedChanged)
++          && !isWorkspacePeekActive()) {
+         startHideFadeOut(*instance);
+         needsRedraw = true;
+       }
+     }
 diff --git a/src/wayland/wayland_toplevels.h b/src/wayland/wayland_toplevels.h
 --- a/src/wayland/wayland_toplevels.h
 +++ b/src/wayland/wayland_toplevels.h
