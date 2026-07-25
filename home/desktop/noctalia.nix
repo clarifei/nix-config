@@ -189,6 +189,11 @@ in
             "gtk3"
             "gtk4"
           ];
+          community_ids = [
+            "pywalfox-beta4"
+            "yazi"
+            "zathura"
+          ];
           user = {
             foot_terminal_sequences = {
               input_path = "${templateRoot}/terminal-sequences";

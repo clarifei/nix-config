@@ -21,7 +21,16 @@
         titlebar = {
           # an empty layout removes buttons without hiding the titlebar
           layout = ":";
-          showTitle = true;
+          showTitle = "yes";
+        };
+      };
+      windowRules.windowRule = {
+        "@identifier" = "*";
+        "@serverDecoration" = "yes";
+        action = {
+          "@name" = "SetDecorations";
+          "@decorations" = "border";
+          "@forceSSD" = "yes";
         };
       };
 

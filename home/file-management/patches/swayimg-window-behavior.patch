@@ -1,0 +1,40 @@
+diff --git a/src/ui/ui.c b/src/ui/ui.c
+index 2bb6ef4..7c61a3d 100644
+--- a/src/ui/ui.c
++++ b/src/ui/ui.c
+@@ -61,6 +61,17 @@ static void* init_wayland(const struct config* cfg, const struct image* img,
+         struct imgframe* frame = arr_nth(img->data->frames, 0);
+         wnd.width = frame->pm.width;
+         wnd.height = frame->pm.height;
++        if (wnd.width > UI_WINDOW_DEFAULT_WIDTH ||
++            wnd.height > UI_WINDOW_DEFAULT_HEIGHT) {
++            const double scale_width =
++                (double)UI_WINDOW_DEFAULT_WIDTH / wnd.width;
++            const double scale_height =
++                (double)UI_WINDOW_DEFAULT_HEIGHT / wnd.height;
++            const double scale =
++                scale_width < scale_height ? scale_width : scale_height;
++            wnd.width = (ssize_t)(wnd.width * scale);
++            wnd.height = (ssize_t)(wnd.height * scale);
++        }
+     } else {
+         ssize_t width, height;
+         struct str_slice slices[2];
+diff --git a/src/viewport.c b/src/viewport.c
+index fa9f8f6..62852a9 100644
+--- a/src/viewport.c
++++ b/src/viewport.c
+@@ -392,7 +392,12 @@ void viewport_scale_abs(struct viewport* vp, double scale, size_t preserve_x,
+     } else {
+         const double scale_w = (double)MIN_SCALE / pm->width;
+         const double scale_h = (double)MIN_SCALE / pm->height;
+-        const double scale_min = max(scale_w, scale_h);
++        const double pixel_scale = max(scale_w, scale_h);
++        const double fit_width = (double)vp->width / pm->width;
++        const double fit_height = (double)vp->height / pm->height;
++        const double fit_scale = min(fit_width, fit_height);
++        const double scale_min = max(pixel_scale, fit_scale);
++
+         if (scale < scale_min) {
+             scale = scale_min;
+         }

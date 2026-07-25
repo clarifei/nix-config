@@ -1,3 +1,9 @@
+{
+  lib,
+  pkgs,
+  ...
+}:
+
 let
   action = name: attrs: { "@name" = name; } // attrs;
   execute = command: action "Execute" { "@command" = command; };
@@ -39,6 +45,10 @@ in
         "@key" = "W-b";
         action = execute "firefox";
       }
+      {
+        "@key" = "W-e";
+        action = execute "foot --app-id=yazi ${lib.getExe pkgs.yazi}";
+      }
 
       # window management
       {
@@ -63,7 +73,17 @@ in
       }
       {
         "@key" = "W-d";
-        action = action "ToggleDecorations" { };
+        action = action "If" {
+          query.decoration = "full";
+          "then".action = action "SetDecorations" {
+            "@decorations" = "border";
+            "@forceSSD" = "yes";
+          };
+          "else".action = action "SetDecorations" {
+            "@decorations" = "full";
+            "@forceSSD" = "yes";
+          };
+        };
       }
       {
         "@key" = "W-h";

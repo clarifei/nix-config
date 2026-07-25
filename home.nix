@@ -1,6 +1,7 @@
 {
   imports = [
     ./home/desktop.nix
+    ./home/file-management.nix
     ./home/programs.nix
   ];
 
