@@ -33,9 +33,14 @@ in
     codex
   ]
   ++ (with pkgs; [
+    fd
     fastfetch
+    jq
     nodejs
     pnpm
+    ripgrep
+    wayland-utils
+    wlrctl
   ]);
 
   # allow generated configs to replace stale home manager backups
