@@ -10,6 +10,10 @@ let
   bel = builtins.fromJSON ''"\u0007"'';
   osc = code: value: "${esc}]${code};${value}${bel}";
 
+  noctaliaPatched = noctalia.packages.${pkgs.stdenv.hostPlatform.system}.default.overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ [ ./patches/noctalia-smart-autohide-labwc.patch ];
+  });
+
   terminalSequences = builtins.concatStringsSep "" [
     (osc "10" "{{colors.terminal_foreground.default.hex}}")
     (osc "11" "{{colors.terminal_background.default.hex}}")
@@ -75,8 +79,10 @@ in
 
   programs.noctalia = {
     enable = true;
+    package = noctaliaPatched;
     settings = {
       bar.default = {
+        smart_auto_hide = true;
         background_opacity = 0.0;
         border_width = 0.0;
         capsule = true;
@@ -87,6 +93,7 @@ in
         end = [ ];
         margin_edge = 6;
         margin_ends = 0;
+        layer = "overlay";
         padding = 10;
         position = "bottom";
         radius = 0;

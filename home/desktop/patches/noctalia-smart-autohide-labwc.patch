@@ -1,0 +1,158 @@
+diff --git a/src/shell/bar/bar.cpp b/src/shell/bar/bar.cpp
+--- a/src/shell/bar/bar.cpp
++++ b/src/shell/bar/bar.cpp
+@@ -70,52 +70,19 @@ namespace {
+     return instance.barConfig.autoHide;
+   }
+ 
+-  [[nodiscard]] bool workspaceKeyMatchesAssignment(std::string_view assignmentKey, const Workspace& workspace) {
+-    if (assignmentKey.empty()) {
+-      return false;
+-    }
+-    if (!workspace.id.empty() && assignmentKey == workspace.id) {
+-      return true;
+-    }
+-    if (!workspace.name.empty() && assignmentKey == workspace.name) {
+-      return true;
+-    }
+-    if (workspace.index > 0 && assignmentKey == std::to_string(workspace.index)) {
+-      return true;
+-    }
+-    return false;
+-  }
+-
+-  [[nodiscard]] bool activeWorkspaceHasWindows(const CompositorPlatform& platform, wl_output* output) {
+-    const auto workspaces = platform.workspaces(output);
+-    const Workspace* active = nullptr;
+-    for (const auto& workspace : workspaces) {
+-      if (workspace.active) {
+-        active = &workspace;
+-        break;
+-      }
+-    }
+-    if (active == nullptr) {
+-      return false;
+-    }
+-
+-    const auto assignments = platform.workspaceWindowAssignments(output);
+-    for (const auto& assignment : assignments) {
+-      if (workspaceKeyMatchesAssignment(assignment.workspaceKey, *active)) {
+-        return true;
+-      }
+-    }
+-    if (!assignments.empty()) {
+-      return false;
+-    }
+-    return active->occupied;
+-  }
+-
+   [[nodiscard]] bool smartAutoHideWantsPinnedVisible(const CompositorPlatform& platform, wl_output* output) {
+     if (platform.hasOverviewState() && platform.isOverviewOpen()) {
+       return true;
+     }
+-    return !activeWorkspaceHasWindows(platform, output);
++
++    // Treat Smart like the Windows taskbar: a bar is only hidden behind the
++    // maximized or fullscreen toplevel on its own output. The layer surface
++    // keeps its edge input strip, so moving the pointer to that edge reveals it.
++    const auto active = platform.activeToplevel();
++    if (!active.has_value() || platform.activeToplevelOutput() != output) {
++      return true;
++    }
++    return !active->maximized && !active->fullscreen;
+   }
+ 
+   [[nodiscard]] FontWeight parseWidgetLabelFontWeight(const WidgetConfig& config, FontWeight fallback) {
+diff --git a/src/wayland/wayland_toplevels.h b/src/wayland/wayland_toplevels.h
+--- a/src/wayland/wayland_toplevels.h
++++ b/src/wayland/wayland_toplevels.h
+@@ -19,6 +19,8 @@ struct ActiveToplevel {
+   std::string appId;
+   std::string identifier;
+   zwlr_foreign_toplevel_handle_v1* handle = nullptr;
++  bool maximized = false;
++  bool fullscreen = false;
+ };
+ 
+ struct ToplevelInfo {
+@@ -102,6 +104,8 @@ private:
+     std::vector<wl_output*> activeOutputs;
+     bool activated = false;
+     bool minimized = false;
++    bool maximized = false;
++    bool fullscreen = false;
+     bool dirty = false;
+     std::uint64_t generation = 0;
+     std::uint64_t order = 0;
+diff --git a/src/wayland/wayland_toplevels.cpp b/src/wayland/wayland_toplevels.cpp
+--- a/src/wayland/wayland_toplevels.cpp
++++ b/src/wayland/wayland_toplevels.cpp
+@@ -114,5 +114,7 @@ std::optional<ActiveToplevel> WaylandToplevels::current() const {
+       .appId = it->second.appId,
+       .identifier = it->second.appId + ":" + it->second.title,
+       .handle = m_currentHandle,
++      .maximized = it->second.maximized,
++      .fullscreen = it->second.fullscreen,
+   };
+ }
+@@ -137,6 +139,8 @@ std::optional<ActiveToplevel> WaylandToplevels::matchByTitleAndAppId(
+           .appId = state.appId,
+           .identifier = state.appId + ":" + state.title,
+           .handle = handle,
++          .maximized = state.maximized,
++          .fullscreen = state.fullscreen,
+       };
+       bestScore = score;
+     }
+@@ -233,5 +235,7 @@ void WaylandToplevels::onHandleState(zwlr_foreign_toplevel_handle_v1* handle, w
+ 
+   bool activated = false;
+   bool minimized = false;
++  bool maximized = false;
++  bool fullscreen = false;
+   if (state != nullptr) {
+     auto* value = static_cast<const std::uint32_t*>(state->data);
+     const auto count = state->size / sizeof(std::uint32_t);
+@@ -239,6 +245,10 @@ void WaylandToplevels::onHandleState(zwlr_foreign_toplevel_handle_v1* handle, w
+         activated = true;
+       } else if (value[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED) {
+         minimized = true;
++      } else if (value[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED) {
++        maximized = true;
++      } else if (value[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN) {
++        fullscreen = true;
+       }
+     }
+   }
+@@ -257,6 +267,8 @@ void WaylandToplevels::onHandleState(zwlr_foreign_toplevel_handle_v1* handle, w
+ 
+   it->second.activated = activated;
+   it->second.minimized = minimized;
++  it->second.maximized = maximized;
++  it->second.fullscreen = fullscreen;
+   it->second.dirty = true;
+   it->second.generation = ++m_generation;
+ }
+@@ -439,7 +451,9 @@ bool WaylandToplevels::notifyIfChanged(const std::optional<ActiveToplevel>& bef
+   if (before->title != now->title
+       || before->appId != now->appId
+       || before->identifier != now->identifier
+-      || before->handle != now->handle) {
++      || before->handle != now->handle
++      || before->maximized != now->maximized
++      || before->fullscreen != now->fullscreen) {
+     if (m_changeCallback) {
+       m_changeCallback();
+     }
+diff --git a/assets/translations/en.json b/assets/translations/en.json
+--- a/assets/translations/en.json
++++ b/assets/translations/en.json
+@@ -1587,7 +1587,7 @@
+       },
+       "bar": {
+         "auto-hide": {
+-          "description": "Off keeps the bar visible; On hides it until you move the pointer to the screen edge; Smart shows the bar on an empty workspace and hides it when windows are open"
++          "description": "Off keeps the bar visible; On hides it until you move the pointer to the screen edge; Smart hides the bar while the focused window is maximized or fullscreen"
+         },
+         "background-opacity": {
+           "description": "Background opacity of the bar"
