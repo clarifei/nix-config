@@ -10,13 +10,7 @@ let
   bel = builtins.fromJSON ''"\u0007"'';
   osc = code: value: "${esc}]${code};${value}${bel}";
 
-  noctaliaPatched = noctalia.packages.${pkgs.stdenv.hostPlatform.system}.default.overrideAttrs (old: {
-    patches = (old.patches or [ ]) ++ [
-      ./patches/noctalia-smart-autohide-labwc.patch
-      ./patches/noctalia-audio-stream-grouping.patch
-      ./patches/noctalia-solid-bar.patch
-    ];
-  });
+  noctaliaPatched = import ../../packages/noctalia.nix { inherit noctalia pkgs; };
 
   terminalSequences = builtins.concatStringsSep "" [
     (osc "10" "{{colors.terminal_foreground.default.hex}}")
@@ -105,8 +99,6 @@ in
         start = [ "workspaces" ];
       };
 
-      dock.radius = 0;
-
       lockscreen_widgets = {
         enabled = false;
         schema_version = 2;
@@ -141,6 +133,8 @@ in
 
       notification.position = "bottom_right";
 
+      plugins.auto_update = false;
+
       osd = {
         position = "bottom_right";
         position_vertical = "bottom_right";
@@ -169,7 +163,6 @@ in
           wallpaper_placement = "floating";
           wallpaper_position = "bottom_left";
         };
-        screen_corners.size = 1;
       };
 
       idle.behavior."screen-off" = {

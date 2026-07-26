@@ -134,22 +134,36 @@ writeShellApplication {
     printf '%s\n' "$request_ticket" > "$sequence_tmp"
     mv -- "$sequence_tmp" "$sequence_file"
     pending_file="$pending_dir/$request_ticket"
-    : > "$pending_file"
+    exec {pending_fd}> "$pending_file"
+    flock --exclusive "$pending_fd"
     flock --unlock "$sequence_fd"
 
     exec {ui_fd}> "$ui_lock_file"
     flock --exclusive "$ui_fd"
 
     # Keep completed transaction intervals until every older ticket has exited. This makes the
-    # protocol independent of the order in which flock wakes its waiters.
+    # protocol independent of the order in which flock wakes its waiters. Holding the sequence
+    # lock makes ticket creation atomic with its liveness lock, so unlocked markers are stale.
+    flock --exclusive "$sequence_fd"
     minimum_pending=$request_ticket
     shopt -s nullglob
     for pending in "$pending_dir"/*; do
       pending_ticket=''${pending##*/}
-      if [[ $pending_ticket =~ ^[0-9]+$ ]] && (( pending_ticket < minimum_pending )); then
+      [[ $pending_ticket =~ ^[0-9]+$ ]] || continue
+      if ! exec {probe_fd}<> "$pending"; then
+        continue
+      fi
+      if flock --exclusive --nonblock "$probe_fd"; then
+        rm -f -- "$pending"
+        exec {probe_fd}>&-
+        continue
+      fi
+      exec {probe_fd}>&-
+      if (( pending_ticket < minimum_pending )); then
         minimum_pending=$pending_ticket
       fi
     done
+    flock --unlock "$sequence_fd"
     for old_result in "$results_dir"/*.result; do
       old_cutoff=
       IFS= read -r old_cutoff < "$old_result" || true

@@ -1,0 +1,378 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Rendy Sebpian <nightcoremosta@gmail.com>
+Date: Mon, 27 Jul 2026 02:30:00 +0700
+Subject: [PATCH] Fuse blur color adjustments into final upsample
+
+Apply brightness, contrast, and saturation to the final Dual-Kawase
+upsample result. This preserves the blur-then-color-transform order while
+removing a full-resolution framebuffer swap, texture read, and draw pass.
+
+diff --git a/include/render/fx_renderer/fx_renderer.h b/include/render/fx_renderer/fx_renderer.h
+index ba6cc4b..69bc9e4 100644
+--- a/include/render/fx_renderer/fx_renderer.h
++++ b/include/render/fx_renderer/fx_renderer.h
+@@ -202,7 +202,6 @@ struct fx_renderer {
+ 		struct box_shadow_shader box_shadow;
+ 		struct blur_shader blur1;
+ 		struct blur_shader blur2;
+-		struct blur_effects_shader blur_effects;
+ 	} shaders;
+ 
+ 	struct wl_list buffers; // fx_framebuffer.link
+diff --git a/include/render/fx_renderer/shaders.h b/include/render/fx_renderer/shaders.h
+index f9d880f..85d0f55 100644
+--- a/include/render/fx_renderer/shaders.h
++++ b/include/render/fx_renderer/shaders.h
+@@ -157,22 +157,13 @@ struct blur_shader {
+ 	GLint pos_attrib;
+ 	GLint radius;
+ 	GLint halfpixel;
++	GLint apply_color_adjustments;
++	GLint brightness;
++	GLint contrast;
++	GLint saturation;
+ };
+ 
+ bool link_blur1_program(struct blur_shader *shader);
+ bool link_blur2_program(struct blur_shader *shader);
+ 
+-struct blur_effects_shader {
+-	GLuint program;
+-	GLint proj;
+-	GLint tex_proj;
+-	GLint tex;
+-	GLint pos_attrib;
+-	GLfloat brightness;
+-	GLfloat contrast;
+-	GLfloat saturation;
+-};
+-
+-bool link_blur_effects_program(struct blur_effects_shader *shader);
+-
+ #endif
+diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
+index 8475d0f..d398510 100644
+--- a/render/fx_renderer/fx_pass.c
++++ b/render/fx_renderer/fx_pass.c
+@@ -832,7 +832,8 @@ void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
+ 
+ // Renders the blur for each damaged rect and swaps the buffer
+ static void render_blur_segments(struct fx_gles_render_pass *pass,
+-		struct fx_render_blur_pass_options *fx_options, struct blur_shader* shader) {
++		struct fx_render_blur_pass_options *fx_options,
++		struct blur_shader *shader, bool apply_color_adjustments) {
+ 	struct fx_render_texture_options *tex_options = &fx_options->tex_options;
+ 	struct wlr_render_texture_options *options = &tex_options->base;
+ 	struct fx_renderer *renderer = pass->buffer->renderer;
+@@ -893,6 +894,14 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
+ 		glUniform2f(shader->halfpixel,
+ 				0.5f / (options->texture->width * 2.0f),
+ 				0.5f / (options->texture->height * 2.0f));
++		bool apply = apply_color_adjustments
++			&& blur_data_should_parameters_blur_effects(blur_data);
++		glUniform1i(shader->apply_color_adjustments, apply);
++		if (apply) {
++			glUniform1f(shader->brightness, blur_data->brightness);
++			glUniform1f(shader->contrast, blur_data->contrast);
++			glUniform1f(shader->saturation, blur_data->saturation);
++		}
+ 	}
+ 
+ 	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
+@@ -914,64 +923,6 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
+ 	}
+ }
+ 
+-static void render_blur_effects(struct fx_gles_render_pass *pass,
+-		struct fx_render_blur_pass_options *fx_options) {
+-	struct fx_render_texture_options *tex_options = &fx_options->tex_options;
+-	struct wlr_render_texture_options *options = &tex_options->base;
+-	struct fx_renderer *renderer = pass->buffer->renderer;
+-	struct blur_data *blur_data = fx_options->blur_data;
+-	struct fx_texture *texture = fx_get_texture(options->texture);
+-
+-	struct blur_effects_shader shader = renderer->shaders.blur_effects;
+-
+-	struct wlr_box dst_box;
+-	struct wlr_fbox src_fbox;
+-	wlr_render_texture_options_get_src_box(options, &src_fbox);
+-	wlr_render_texture_options_get_dst_box(options, &dst_box);
+-
+-	src_fbox.x /= options->texture->width;
+-	src_fbox.y /= options->texture->height;
+-	src_fbox.width /= options->texture->width;
+-	src_fbox.height /= options->texture->height;
+-
+-	glDisable(GL_BLEND);
+-	glDisable(GL_STENCIL_TEST);
+-
+-	TRACY_BOTH_ZONES_START(renderer);
+-	push_fx_debug(renderer);
+-
+-	glUseProgram(shader.program);
+-
+-	glActiveTexture(GL_TEXTURE0);
+-	glBindTexture(texture->target, texture->tex);
+-
+-	switch (options->filter_mode) {
+-	case WLR_SCALE_FILTER_BILINEAR:
+-		glTexParameteri(texture->target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+-		glTexParameteri(texture->target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+-		break;
+-	case WLR_SCALE_FILTER_NEAREST:
+-		abort();
+-	}
+-
+-	glUniform1i(shader.tex, 0);
+-	glUniform1f(shader.brightness, blur_data->brightness);
+-	glUniform1f(shader.contrast, blur_data->contrast);
+-	glUniform1f(shader.saturation, blur_data->saturation);
+-
+-	set_proj_matrix(shader.proj, pass->projection_matrix, &dst_box);
+-	set_tex_matrix(shader.tex_proj, options->transform, &src_fbox);
+-
+-	render(&dst_box, options->clip, shader.pos_attrib);
+-
+-	glBindTexture(texture->target, 0);
+-
+-	pop_fx_debug(renderer);
+-	TRACY_BOTH_ZONES_END;
+-
+-	wlr_texture_destroy(options->texture);
+-}
+-
+ // Blurs the fx_options current_buffer content and returns the blurred framebuffer.
+ // Returns NULL when the blur parameters reach 0.
+ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *pass,
+@@ -1054,37 +1005,20 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
+ 	// Downscale
+ 	for (int i = 0; i < blur_data.num_passes; ++i) {
+ 		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << (i + 1)));
+-		render_blur_segments(pass, fx_options, &renderer->shaders.blur1);
++		render_blur_segments(pass, fx_options, &renderer->shaders.blur1,
++			false);
+ 	}
+ 
+ 	// Upscale
+ 	for (int i = blur_data.num_passes - 1; i >= 0; --i) {
+ 		// when upsampling we make the region twice as big
+ 		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << i));
+-		render_blur_segments(pass, fx_options, &renderer->shaders.blur2);
++		render_blur_segments(pass, fx_options, &renderer->shaders.blur2,
++			i == 0);
+ 	}
+ 
+ 	pixman_region32_fini(&scaled_damage);
+ 
+-	// Render additional blur color adjustments.
+-	if (blur_data_should_parameters_blur_effects(&blur_data)
+-			&& pixman_region32_not_empty(&damage)) {
+-		if (fx_options->current_buffer == pass->fx_offscreen_buffers->effects_buffer) {
+-			fx_framebuffer_bind(pass->fx_offscreen_buffers->effects_buffer_swapped);
+-		} else {
+-			fx_framebuffer_bind(pass->fx_offscreen_buffers->effects_buffer);
+-		}
+-		fx_options->tex_options.base.clip = &damage;
+-		fx_options->tex_options.base.texture = fx_texture_from_buffer(
+-				&renderer->wlr_renderer, fx_options->current_buffer->buffer);
+-		render_blur_effects(pass, fx_options);
+-		if (fx_options->current_buffer != pass->fx_offscreen_buffers->effects_buffer) {
+-			fx_options->current_buffer = pass->fx_offscreen_buffers->effects_buffer;
+-		} else {
+-			fx_options->current_buffer = pass->fx_offscreen_buffers->effects_buffer_swapped;
+-		}
+-	}
+-
+ 	pixman_region32_fini(&damage);
+ 
+ 	// Bind back to the default buffer
+diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
+index 8d0a7b2..df9b940 100644
+--- a/render/fx_renderer/fx_renderer.c
++++ b/render/fx_renderer/fx_renderer.c
+@@ -97,7 +97,6 @@ static inline void free_shaders(struct fx_renderer *renderer) {
+ 	glDeleteProgram(renderer->shaders.box_shadow.program);
+ 	glDeleteProgram(renderer->shaders.blur1.program);
+ 	glDeleteProgram(renderer->shaders.blur2.program);
+-	glDeleteProgram(renderer->shaders.blur_effects.program);
+ 	pop_fx_debug(renderer);
+ }
+ 
+@@ -432,10 +431,6 @@ static bool link_shaders(struct fx_renderer *renderer) {
+ 		wlr_log(WLR_ERROR, "Could not link blur2 shader");
+ 		goto error;
+ 	}
+-	if (!link_blur_effects_program(&renderer->shaders.blur_effects)) {
+-		wlr_log(WLR_ERROR, "Could not link blur_effects shader");
+-		goto error;
+-	}
+ 
+ 	return true;
+ 
+diff --git a/render/fx_renderer/shaders.c b/render/fx_renderer/shaders.c
+index 1f9ef58..374cc10 100644
+--- a/render/fx_renderer/shaders.c
++++ b/render/fx_renderer/shaders.c
+@@ -19,7 +19,6 @@
+ #include "box_shadow_frag_src.h"
+ #include "blur1_frag_src.h"
+ #include "blur2_frag_src.h"
+-#include "blur_effects_frag_src.h"
+ 
+ GLuint compile_shader(GLuint type, const GLchar *src) {
+ 	GLuint shader = glCreateShader(type);
+@@ -338,20 +337,8 @@ bool link_blur2_program(struct blur_shader *shader) {
+ 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
+ 	shader->radius = glGetUniformLocation(prog, "radius");
+ 	shader->halfpixel = glGetUniformLocation(prog, "halfpixel");
+-
+-	return true;
+-}
+-
+-bool link_blur_effects_program(struct blur_effects_shader *shader) {
+-	GLuint prog;
+-	shader->program = prog = link_program(blur_effects_frag_src);
+-	if (!shader->program) {
+-		return false;
+-	}
+-	shader->proj = glGetUniformLocation(prog, "proj");
+-	shader->tex = glGetUniformLocation(prog, "tex");
+-	shader->pos_attrib = glGetAttribLocation(prog, "pos");
+-	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
++	shader->apply_color_adjustments = glGetUniformLocation(prog,
++		"apply_color_adjustments");
+ 	shader->brightness = glGetUniformLocation(prog, "brightness");
+ 	shader->contrast = glGetUniformLocation(prog, "contrast");
+ 	shader->saturation = glGetUniformLocation(prog, "saturation");
+diff --git a/render/fx_renderer/shaders/blur2.frag b/render/fx_renderer/shaders/blur2.frag
+index 2260e0e..38cf5eb 100644
+--- a/render/fx_renderer/shaders/blur2.frag
++++ b/render/fx_renderer/shaders/blur2.frag
+@@ -9,6 +9,40 @@ uniform sampler2D tex;
+ 
+ uniform float radius;
+ uniform vec2 halfpixel;
++uniform bool apply_color_adjustments;
++uniform float brightness;
++uniform float contrast;
++uniform float saturation;
++
++mat4 brightnessMatrix() {
++	float b = brightness - 1.0;
++	return mat4(1, 0, 0, 0,
++				0, 1, 0, 0,
++				0, 0, 1, 0,
++				b, b, b, 1);
++}
++
++mat4 contrastMatrix() {
++	float t = (1.0 - contrast) / 2.0;
++	return mat4(contrast, 0, 0, 0,
++				0, contrast, 0, 0,
++				0, 0, contrast, 0,
++				t, t, t, 1);
++}
++
++mat4 saturationMatrix() {
++	vec3 luminance = vec3(0.3086, 0.6094, 0.0820) * (1.0 - saturation);
++	vec3 red = vec3(luminance.x);
++	red.x += saturation;
++	vec3 green = vec3(luminance.y);
++	green.y += saturation;
++	vec3 blue = vec3(luminance.z);
++	blue.z += saturation;
++	return mat4(red, 0,
++				green, 0,
++				blue, 0,
++				0, 0, 0, 1);
++}
+ 
+ void main() {
+     vec2 uv = v_texcoord / 2.0;
+@@ -23,5 +57,10 @@ void main() {
+     sum += texture2D(tex, uv + vec2(0.0, -halfpixel.y * 2.0) * radius);
+     sum += texture2D(tex, uv + vec2(-halfpixel.x, -halfpixel.y) * radius) * 2.0;
+ 
+-    gl_FragColor = sum / 12.0;
++	vec4 color = sum / 12.0;
++	if (apply_color_adjustments) {
++		// Keep the same matrix order as the former post-processing pass.
++		color = brightnessMatrix() * contrastMatrix() * saturationMatrix() * color;
++	}
++	gl_FragColor = color;
+ }
+diff --git a/render/fx_renderer/shaders/blur_effects.frag b/render/fx_renderer/shaders/blur_effects.frag
+deleted file mode 100644
+index 78bcf81..0000000
+--- a/render/fx_renderer/shaders/blur_effects.frag
++++ /dev/null
+@@ -1,49 +0,0 @@
+-#ifdef GL_FRAGMENT_PRECISION_HIGH
+-precision highp float;
+-#else
+-precision mediump float;
+-#endif
+-
+-varying vec2 v_texcoord;
+-uniform sampler2D tex;
+-
+-uniform float brightness;
+-uniform float contrast;
+-uniform float saturation;
+-
+-mat4 brightnessMatrix() {
+-	float b = brightness - 1.0;
+-	return mat4(1, 0, 0, 0,
+-				0, 1, 0, 0,
+-				0, 0, 1, 0,
+-				b, b, b, 1);
+-}
+-
+-mat4 contrastMatrix() {
+-	float t = (1.0 - contrast) / 2.0;
+-	return mat4(contrast, 0, 0, 0,
+-				0, contrast, 0, 0,
+-				0, 0, contrast, 0,
+-				t, t, t, 1);
+-}
+-
+-mat4 saturationMatrix() {
+-	vec3 luminance = vec3(0.3086, 0.6094, 0.0820) * (1.0 - saturation);
+-	vec3 red = vec3(luminance.x);
+-	red.x += saturation;
+-	vec3 green = vec3(luminance.y);
+-	green.y += saturation;
+-	vec3 blue = vec3(luminance.z);
+-	blue.z += saturation;
+-	return mat4(red, 0,
+-				green, 0,
+-				blue, 0,
+-				0, 0, 0, 1);
+-}
+-
+-void main() {
+-	vec4 color = texture2D(tex, v_texcoord);
+-	// Do *not* transpose the combined matrix when multiplying
+-	color = brightnessMatrix() * contrastMatrix() * saturationMatrix() * color;
+-	gl_FragColor = color;
+-}
+diff --git a/render/fx_renderer/shaders/meson.build b/render/fx_renderer/shaders/meson.build
+index 1bafd4f..806daa4 100644
+--- a/render/fx_renderer/shaders/meson.build
++++ b/render/fx_renderer/shaders/meson.build
+@@ -13,7 +13,6 @@ shaders = [
+ 	'box_shadow.frag',
+ 	'blur1.frag',
+ 	'blur2.frag',
+-	'blur_effects.frag',
+ ]
+ 
+ foreach name : shaders
+@@ -28,4 +27,3 @@ foreach name : shaders
+ 		capture: true,
+ 	)
+ endforeach
+-
+-- 
+2.54.0
+

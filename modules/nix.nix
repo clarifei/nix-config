@@ -6,7 +6,7 @@
 
   nix = {
     settings = {
-      auto-optimise-store = true;
+      auto-optimise-store = false;
       experimental-features = [
         "nix-command"
         "flakes"
@@ -22,6 +22,10 @@
         "lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc="
         "noctalia.cachix.org-1:pCOR47nnMEo5thcxNDtzWpOxNFQsBRglJzxWPp3dkU4="
       ];
+    };
+    optimise = {
+      automatic = true;
+      dates = [ "weekly" ];
     };
   };
 

@@ -8,13 +8,14 @@ diff --git a/docs/labwc-actions.5.scd b/docs/labwc-actions.5.scd
 index 2677e34..4d7ded0 100644
 --- a/docs/labwc-actions.5.scd
 +++ b/docs/labwc-actions.5.scd
-@@ -202,6 +202,10 @@ argument. Default is "center".
+@@ -202,6 +202,11 @@ argument. Default is "center".
  </keybind>
  ```
  
 +*<action name="ToggleWindowEffects" />*
 +	Toggle the configured opacity and blur effects for the focused window.
-+	Fullscreen windows remain opaque with blur disabled.
++	Fullscreen windows use compositor opacity 1.0 with blur disabled; client
++	alpha modifiers still apply.
 +
  *<action name="SetDecorations" decorations="value" forceSSD="no" />*
  	Set decorations of focused window.
@@ -31,8 +32,8 @@ index 6a16b89..97d4e1b 100644
 +
 +Window effects apply to the content of regular Wayland and XWayland windows.
 +Popups, menus, server-side decorations and captured window content are
-+unaffected. Fullscreen windows are always opaque and have blur disabled to
-+preserve direct scanout.
++unaffected. Fullscreen windows use compositor opacity 1.0 and have blur
++disabled, allowing direct scanout when the client buffer is otherwise opaque.
 +
 +Layer-shell effects apply only to surfaces that request a non-empty blur
 +region using ext-background-effect-v1. This lets clients select which shell

@@ -39,6 +39,10 @@
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
         in
         {
+          labwc-scenefx = pkgs.callPackage ./packages/labwc-window-capture.nix { };
+
+          noctalia = import ./packages/noctalia.nix { inherit noctalia pkgs; };
+
           noctalia-audio-grouping = pkgs.runCommand "noctalia-audio-grouping-test" {
             nativeBuildInputs = [
               pkgs.gcc
@@ -56,6 +60,7 @@
 
           vesktop-screen-share-transaction = pkgs.runCommand "vesktop-screen-share-transaction-test" {
             nativeBuildInputs = [
+              pkgs.gnugrep
               pkgs.nodejs
               pkgs.patch
             ];
@@ -63,6 +68,8 @@
             cp -r ${pkgs.vesktop.src} source
             chmod -R u+w source
             patch --directory=source --strip=1 < ${./modules/patches/vesktop-screen-share-transaction.patch}
+            grep -Fq 'width: 960' source/src/main/screenShare.ts
+            grep -Fq 'height: 540' source/src/main/screenShare.ts
             node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test source/tests/singleFlight.test.ts
             touch "$out"
           '';
@@ -85,32 +92,17 @@
 
           vesktop-wayland-picker-runtime =
             let
-              vesktop =
-                (pkgs.vesktop.override { electron_42 = pkgs.electron_41; }).overrideAttrs (oldAttrs: {
-                  patches = (oldAttrs.patches or [ ]) ++ [
-                    ./modules/patches/vesktop-screen-share-transaction.patch
-                    ./modules/patches/vesktop-square-splash.patch
-                  ];
-                });
+              vesktop = pkgs.callPackage ./packages/vesktop.nix { };
             in
             pkgs.runCommand "vesktop-wayland-picker-runtime-test" { } ''
               grep -Fq '${pkgs.electron_41}/bin/electron' ${vesktop}/bin/vesktop
               touch "$out"
             '';
 
-          xdpw-restore-data-gate = pkgs.runCommand "xdpw-restore-data-gate-test" {
-            nativeBuildInputs = [
-              pkgs.gnugrep
-              pkgs.patch
-            ];
-          } ''
-            cp -r ${pkgs.xdg-desktop-portal-wlr.src} source
-            chmod -R u+w source
-            patch --directory=source --strip=1 < ${./modules/patches/xdpw-window-restore.patch}
-            grep -Fq 'if (data && sess->screencast_data.persist_mode != PERSIST_NONE)' \
-              source/src/screencast/screencast.c
-            touch "$out"
-          '';
+          termfilechooser-filters =
+            pkgs.callPackage ./packages/xdg-desktop-portal-termfilechooser.nix { };
+
+          xdpw-window-restore = pkgs.callPackage ./packages/xdg-desktop-portal-wlr.nix { };
 
           xdpw-foot-chooser = pkgs.callPackage ./tests/xdpw-foot-chooser.nix { };
           labwc-window-switcher = pkgs.callPackage ./tests/labwc-window-switcher.nix { };

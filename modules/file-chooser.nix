@@ -3,9 +3,10 @@
 {
   nixpkgs.overlays = [
     (_final: prev: {
-      xdg-desktop-portal-termfilechooser = prev.xdg-desktop-portal-termfilechooser.overrideAttrs (oldAttrs: {
-        patches = (oldAttrs.patches or [ ]) ++ [ ./patches/termfilechooser-filters.patch ];
-      });
+      xdg-desktop-portal-termfilechooser =
+        prev.callPackage ../packages/xdg-desktop-portal-termfilechooser.nix {
+          xdg-desktop-portal-termfilechooser = prev.xdg-desktop-portal-termfilechooser;
+        };
     })
   ];
 

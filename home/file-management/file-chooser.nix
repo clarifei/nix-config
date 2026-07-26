@@ -87,7 +87,7 @@ let
         [[ ( -e $selected || -L $selected ) && ! -d $selected ]] || return 1
         (( ''${#filter_types[@]} > 0 )) || return 0
 
-        filename=$(basename -- "$selected")
+        filename=''${selected##*/}
         mime=
 
         if [[ $save == 1 && $has_glob_rules == 0 ]]; then

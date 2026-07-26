@@ -1,0 +1,221 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Rendy Sebpian <nightcoremosta@gmail.com>
+Date: Mon, 27 Jul 2026 10:30:00 +0700
+Subject: [PATCH] Add inherited buffer opacity to scene trees
+
+Keep compositor opacity separate from the per-surface alpha modifier. This
+lets compositors update opacity only when their own state changes while new
+surface and subsurface buffers inherit the correct multiplier automatically.
+Cache the inherited multiplier in each render-list entry so culling and
+rendering do not walk the ancestor chain repeatedly.
+
+diff --git a/include/scenefx/types/wlr_scene.h b/include/scenefx/types/wlr_scene.h
+index aea68b0..cc30504 100644
+--- a/include/scenefx/types/wlr_scene.h
++++ b/include/scenefx/types/wlr_scene.h
+@@ -99,6 +99,7 @@ struct wlr_scene_tree {
+ 	struct wlr_scene_node node;
+ 
+ 	struct wl_list children; // wlr_scene_node.link
++	float buffer_opacity;
+ };
+ 
+ /** The root scene-graph node. */
+@@ -459,6 +460,13 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene *scene, struct wlr_color_ma
+  */
+ struct wlr_scene_tree *wlr_scene_tree_create(struct wlr_scene_tree *parent);
+ 
++/**
++ * Set an opacity multiplier inherited by all buffer nodes in this tree.
++ * This is combined with per-surface alpha modifiers at render time.
++ */
++void wlr_scene_tree_set_buffer_opacity(struct wlr_scene_tree *tree,
++	float opacity);
++
+ /**
+  * Add a node displaying a single surface to the scene-graph.
+  *
+diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
+index 8ca296d..86cf9ad 100644
+--- a/types/scene/wlr_scene.c
++++ b/types/scene/wlr_scene.c
+@@ -203,6 +203,7 @@ static void scene_tree_init(struct wlr_scene_tree *tree,
+ 	*tree = (struct wlr_scene_tree){0};
+ 	scene_node_init(&tree->node, WLR_SCENE_NODE_TREE, parent);
+ 	wl_list_init(&tree->children);
++	tree->buffer_opacity = 1.0f;
+ }
+ 
+ struct wlr_scene *wlr_scene_create(void) {
+@@ -320,8 +321,18 @@ static pixman_region32_t create_corner_location_region(struct fx_corner_radii co
+ 	return corner_region;
+ }
+ 
++static float scene_node_get_buffer_opacity(struct wlr_scene_node *node) {
++	float opacity = 1.0f;
++	for (struct wlr_scene_tree *tree = node->parent; tree != NULL;
++			tree = tree->node.parent) {
++		opacity *= tree->buffer_opacity;
++	}
++	return opacity;
++}
++
+-static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
+-		pixman_region32_t *opaque) {
++static void scene_node_opaque_region_with_buffer_opacity(
++		struct wlr_scene_node *node, int x, int y,
++		pixman_region32_t *opaque, float buffer_opacity) {
+ 	int width, height;
+ 	scene_node_get_size(node, &width, &height);
+ 
+@@ -358,7 +369,7 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
+ 			return;
+ 		}
+ 
+-		if (scene_buffer->opacity != 1) {
++		if (scene_buffer->opacity * buffer_opacity != 1.0f) {
+ 			return;
+ 		}
+ 
+@@ -391,6 +402,14 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
+ 	pixman_region32_init_rect(opaque, x, y, width, height);
+ }
+ 
++static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
++		pixman_region32_t *opaque) {
++	float buffer_opacity = node->type == WLR_SCENE_NODE_BUFFER
++		? scene_node_get_buffer_opacity(node) : 1.0f;
++	scene_node_opaque_region_with_buffer_opacity(
++		node, x, y, opaque, buffer_opacity);
++}
++
+ struct scene_update_data {
+ 	pixman_region32_t *visible;
+ 	const pixman_region32_t *update_region;
+@@ -871,6 +890,17 @@ static void scene_node_update(struct wlr_scene_node *node,
+ 	pixman_region32_fini(damage);
+ }
+ 
++void wlr_scene_tree_set_buffer_opacity(struct wlr_scene_tree *tree,
++		float opacity) {
++	assert(opacity >= 0.0f && opacity <= 1.0f);
++	if (tree->buffer_opacity == opacity) {
++		return;
++	}
++
++	tree->buffer_opacity = opacity;
++	scene_node_update(&tree->node, NULL);
++}
++
+ struct wlr_scene_rect *wlr_scene_rect_create(struct wlr_scene_tree *parent,
+ 		int width, int height, const float color[static 4]) {
+ 	assert(parent);
+@@ -1943,6 +1973,7 @@ struct render_list_entry {
+ 	struct wlr_scene_node *node;
+ 	bool highlight_transparent_region;
+ 	int x, y;
++	float buffer_opacity;
+ };
+ 
+ static float get_luminance_multiplier(const struct wlr_color_luminances *src_lum,
+@@ -1977,7 +2008,8 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 
+ 	pixman_region32_t opaque;
+ 	pixman_region32_init(&opaque);
+-	scene_node_opaque_region(node, x, y, &opaque);
++	scene_node_opaque_region_with_buffer_opacity(
++		node, x, y, &opaque, entry->buffer_opacity);
+ 	logical_to_buffer_coords(&opaque, data, false);
+ 	pixman_region32_subtract(&opaque, &render_region, &opaque);
+ 
+@@ -2037,6 +2069,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 	case WLR_SCENE_NODE_BUFFER:;
+ 		struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_from_node(node);
+ 		struct fx_corner_radii buffer_corners = scene_buffer->corners;
++		float opacity = scene_buffer->opacity * entry->buffer_opacity;
+ 
+ 		if (scene_buffer->is_single_pixel_buffer) {
+ 			// TODO: Render blur/rounded corners/etc here:
+@@ -2049,7 +2082,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 					.g = (float)scene_buffer->single_pixel_buffer_color[1] / (float)UINT32_MAX,
+ 					.b = (float)scene_buffer->single_pixel_buffer_color[2] / (float)UINT32_MAX,
+ 					.a = (float)scene_buffer->single_pixel_buffer_color[3] /
+-						(float)UINT32_MAX * scene_buffer->opacity,
++						(float)UINT32_MAX * opacity,
+ 				},
+ 				.clip = &render_region,
+ 			});
+@@ -2087,7 +2120,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 				.dst_box = dst_box,
+ 				.transform = transform,
+ 				.clip = &render_region, // Render with the smaller region, clipping CSD
+-				.alpha = &scene_buffer->opacity,
++				.alpha = &opacity,
+ 				.filter_mode = scene_buffer->filter_mode,
+ 				.blend_mode = !data->output->scene->calculate_visibility ||
+ 					!pixman_region32_empty(&opaque) ?
+@@ -2579,13 +2612,14 @@ struct render_list_constructor_data {
+ 	bool fractional_scale;
+ };
+ 
+-static bool scene_buffer_is_black_opaque(struct wlr_scene_buffer *scene_buffer) {
++static bool scene_buffer_is_black_opaque(struct wlr_scene_buffer *scene_buffer,
++		float buffer_opacity) {
+ 	return scene_buffer->is_single_pixel_buffer &&
+ 		scene_buffer->single_pixel_buffer_color[0] == 0 &&
+ 		scene_buffer->single_pixel_buffer_color[1] == 0 &&
+ 		scene_buffer->single_pixel_buffer_color[2] == 0 &&
+ 		scene_buffer->single_pixel_buffer_color[3] == UINT32_MAX &&
+-		scene_buffer->opacity == 1.0 &&
++		scene_buffer->opacity * buffer_opacity == 1.0f &&
+ 		fx_corner_radii_is_empty(&scene_buffer->corners);
+ }
+ 
+@@ -2606,6 +2640,8 @@ static bool construct_render_list_iterator(struct wlr_scene_node *node,
+ 	if (scene_node_invisible(node)) {
+ 		return false;
+ 	}
++	float buffer_opacity = node->type == WLR_SCENE_NODE_BUFFER
++		? scene_node_get_buffer_opacity(node) : 1.0f;
+ 
+ 	// While rendering, the background should always be black. If we see a
+ 	// black rect, we can ignore rendering everything under the rect, and
+@@ -2625,7 +2661,7 @@ static bool construct_render_list_iterator(struct wlr_scene_node *node,
+ 			(!data->fractional_scale || data->render_list->size == 0)) {
+ 		struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_from_node(node);
+ 
+-		if (scene_buffer_is_black_opaque(scene_buffer)) {
++		if (scene_buffer_is_black_opaque(scene_buffer, buffer_opacity)) {
+ 			return false;
+ 		}
+ 	}
+@@ -2651,6 +2687,7 @@ static bool construct_render_list_iterator(struct wlr_scene_node *node,
+ 		.node = node,
+ 		.x = lx,
+ 		.y = ly,
++		.buffer_opacity = buffer_opacity,
+ 		.highlight_transparent_region = data->highlight_transparent_region,
+ 	};
+ 
+@@ -2759,6 +2796,9 @@ static enum scene_direct_scanout_result scene_entry_try_direct_scanout(
+ 	if (buffer->buffer == NULL) {
+ 		return SCANOUT_INELIGIBLE;
+ 	}
++	if (buffer->opacity * entry->buffer_opacity != 1.0f) {
++		return SCANOUT_INELIGIBLE;
++	}
+ 
+ 	// The native size of the buffer after any transform is applied
+ 	int default_width = buffer->buffer->width;
+@@ -3385,7 +3425,8 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+ 			// rendering in that black rect region, consider the node's visibility.
+ 			pixman_region32_t opaque;
+ 			pixman_region32_init(&opaque);
+-			scene_node_opaque_region(entry->node, entry->x, entry->y, &opaque);
++			scene_node_opaque_region_with_buffer_opacity(entry->node,
++				entry->x, entry->y, &opaque, entry->buffer_opacity);
+ 			pixman_region32_intersect(&opaque, &opaque, &entry->node->visible);
+ 
+ 			pixman_region32_translate(&opaque, -scene_output->x, -scene_output->y);
+-- 
+2.54.0

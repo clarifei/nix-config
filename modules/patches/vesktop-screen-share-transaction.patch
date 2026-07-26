@@ -18,8 +18,8 @@ index a96b1ce..669b477 100644
 +        .getSources({
 +            types: ["window", "screen"],
 +            thumbnailSize: {
-+                width: 1920,
-+                height: 1080
++                width: 960,
++                height: 540
 +            }
 +        })
 +        .catch(err => {

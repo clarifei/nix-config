@@ -37,7 +37,7 @@ in
         };
         blur = {
           enabled = "yes";
-          # Dual-Kawase blur scales exponentially with the number of passes.
+          # Blur footprint grows exponentially with passes, so keep damage expansion low.
           passes = 2;
           radius = 4;
           brightness = 0.9;

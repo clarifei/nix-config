@@ -38,7 +38,7 @@ in
         ];
         document = [
           {
-            run = "${lib.getExe pkgs.zathura} -- %s";
+            run = "${lib.getExe config.programs.zathura.package} -- %s";
             orphan = true;
             desc = "open document";
           }

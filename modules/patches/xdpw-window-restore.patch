@@ -53,41 +53,54 @@ diff --git a/src/screencast/screencast.c b/src/screencast/screencast.c
  		}
  	}
  	if (!cast) {
-@@ -688,13 +693,21 @@ static int method_screencast_start(sd_bus_message *msg, void *data,
+@@ -688,15 +693,26 @@ static int method_screencast_start(sd_bus_message *msg, void *data,
  	if (ret < 0) {
  		return ret;
  	}
 -	if (sess->screencast_data.persist_mode != PERSIST_NONE && cast->target->output) {
 -		struct xdpw_screencast_restore_data restore_data;
 -		restore_data.output_name = cast->target->output->name;
-+	if (sess->screencast_data.persist_mode != PERSIST_NONE &&
-+			(cast->target->output || cast->target->toplevel)) {
-+		const char *restore_key;
-+		const char *restore_value;
-+		if (cast->target->type == MONITOR) {
+-		ret = sd_bus_message_append(reply, "{sv}",
+-			"restore_data", "(suv)",
+-			"wlroots", XDP_CAST_DATA_VER,
+-			"a{sv}", 1, "output_name", "s", restore_data.output_name);
+-		if (ret < 0) {
+-			return ret;
++	if (sess->screencast_data.persist_mode != PERSIST_NONE) {
++		const char *restore_key = NULL;
++		const char *restore_value = NULL;
++		if (cast->target->type == MONITOR && cast->target->output &&
++				cast->target->output->name) {
 +			restore_key = "output_name";
 +			restore_value = cast->target->output->name;
-+		} else {
++		} else if (cast->target->type == WINDOW && cast->target->toplevel &&
++				cast->target->toplevel->identifier) {
 +			restore_key = "window_identifier";
 +			restore_value = cast->target->toplevel->identifier;
 +		}
- 		ret = sd_bus_message_append(reply, "{sv}",
- 			"restore_data", "(suv)",
- 			"wlroots", XDP_CAST_DATA_VER,
--			"a{sv}", 1, "output_name", "s", restore_data.output_name);
-+			"a{sv}", 1, restore_key, "s", restore_value);
- 		if (ret < 0) {
- 			return ret;
++		if (restore_value) {
++			ret = sd_bus_message_append(reply, "{sv}",
++				"restore_data", "(suv)",
++				"wlroots", XDP_CAST_DATA_VER,
++				"a{sv}", 1, restore_key, "s", restore_value);
++			if (ret < 0) {
++				return ret;
++			}
  		}
+ 	}
+ 
 diff --git a/src/screencast/chooser.c b/src/screencast/chooser.c
 --- a/src/screencast/chooser.c
 +++ b/src/screencast/chooser.c
-@@ -127,6 +127,24 @@
+@@ -127,6 +127,27 @@
  	}
  }
  
 +static bool dmenu_label_matches_toplevel(const char *label, const char *identifier) {
 +	static const char prefix[] = "Window: ";
++	if (!label || !identifier) {
++		return false;
++	}
 +	const size_t label_len = strlen(label);
 +	const size_t identifier_len = strlen(identifier);
 +	const size_t prefix_len = sizeof(prefix) - 1;
@@ -107,7 +120,7 @@ diff --git a/src/screencast/chooser.c b/src/screencast/chooser.c
  static bool wlr_chooser(const struct xdpw_chooser *chooser,
  		struct xdpw_screencast_context *ctx, struct xdpw_screencast_target *target,
  		uint32_t type_mask) {
-@@ -201,6 +219,9 @@
+@@ -201,6 +222,9 @@
  		char *label = get_toplevel_label(toplevel, chooser->type);
  		found = strcmp(selected_label, label) == 0;
  		free(label);

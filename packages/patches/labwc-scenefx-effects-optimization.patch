@@ -1,0 +1,240 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Rendy Sebpian <nightcoremosta@gmail.com>
+Date: Mon, 27 Jul 2026 10:45:00 +0700
+Subject: [PATCH] Make SceneFX opacity updates event driven
+
+Use SceneFX scene-tree buffer opacity instead of rewriting every scene buffer
+on every output frame. Surface alpha modifiers remain independent, new
+subsurfaces inherit compositor opacity, and layer effects are recalculated only
+when their region, size, or configuration changes.
+
+diff --git a/include/layers.h b/include/layers.h
+index 5cf8d08..a9e4bf5 100644
+--- a/include/layers.h
++++ b/include/layers.h
+@@ -17,6 +17,8 @@ struct lab_layer_surface {
+ 	struct wl_list link;
+ 	struct {
+ 		struct wlr_scene_blur *blur;
++		int width;
++		int height;
+ 	} effects;
+ 
+ 	bool mapped;
+diff --git a/include/view.h b/include/view.h
+index 55fa884..7dfeac7 100644
+--- a/include/view.h
++++ b/include/view.h
+@@ -486,7 +486,6 @@ void view_set_activated(struct view *view, bool activated);
+ void view_effects_create(struct view *view);
+ void view_effects_toggle(struct view *view);
+ void view_effects_update(struct view *view);
+-void view_effects_update_all(void);
+ void view_effects_reconfigure(void);
+ void view_set_output(struct view *view, struct output *output);
+ void view_close(struct view *view);
+diff --git a/src/background-effects.c b/src/background-effects.c
+index f2ee05f..214241b 100644
+--- a/src/background-effects.c
++++ b/src/background-effects.c
+@@ -51,7 +51,14 @@ surface_destroy(struct background_effect_surface *surface)
+ static void
+ handle_surface_resource_destroy(struct wl_resource *resource)
+ {
+-	surface_destroy(surface_from_resource(resource));
++	struct background_effect_surface *surface =
++		surface_from_resource(resource);
++	if (!surface) {
++		return;
++	}
++	struct wlr_surface *wlr_surface = surface->surface;
++	surface_destroy(surface);
++	layers_surface_effects_update(wlr_surface);
+ }
+ 
+ static void
+@@ -117,7 +124,9 @@ state_commit(struct wlr_surface_synced *synced)
+ {
+ 	struct background_effect_surface *surface =
+ 		wl_container_of(synced, surface, synced);
+-	layers_surface_effects_update(surface->surface);
++	if (surface->current.committed) {
++		layers_surface_effects_update(surface->surface);
++	}
+ }
+ 
+ static const struct wlr_surface_synced_impl synced_impl = {
+diff --git a/src/layers.c b/src/layers.c
+index 64d6068..3a59fa1 100644
+--- a/src/layers.c
++++ b/src/layers.c
+@@ -12,7 +12,6 @@
+ #include <stdbool.h>
+ #include <stdlib.h>
+ #include <strings.h>
+-#include <wlr/types/wlr_alpha_modifier_v1.h>
+ #include <wlr/types/wlr_cursor.h>
+ #include <wlr/types/wlr_fractional_scale_v1.h>
+ #include <wlr/types/wlr_layer_shell_v1.h>
+@@ -32,25 +31,6 @@
+ 
+ static struct wl_list layer_surfaces = WL_LIST_INIT(&layer_surfaces);
+ 
+-static void
+-set_layer_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
+-{
+-	(void)sx;
+-	(void)sy;
+-	float opacity = *(float *)data;
+-	struct wlr_scene_surface *surface =
+-		wlr_scene_surface_try_from_buffer(buffer);
+-	if (surface) {
+-		const struct wlr_alpha_modifier_surface_v1_state *alpha =
+-			wlr_alpha_modifier_v1_get_surface_state(
+-				surface->surface);
+-		if (alpha) {
+-			opacity *= alpha->multiplier;
+-		}
+-	}
+-	wlr_scene_buffer_set_opacity(buffer, opacity);
+-}
+-
+ struct mask_lookup {
+ 	struct wlr_surface *surface;
+ 	struct wlr_scene_buffer *buffer;
+@@ -73,6 +53,8 @@ static void
+ layer_effects_update(struct lab_layer_surface *layer)
+ {
+ 	struct wlr_surface *surface = layer->layer_surface->surface;
++	layer->effects.width = surface->current.width;
++	layer->effects.height = surface->current.height;
+ 	const pixman_region32_t *requested_region =
+ 		background_effects_get_blur_region(surface);
+ 	pixman_region32_t region;
+@@ -87,8 +69,8 @@ layer_effects_update(struct lab_layer_surface *layer)
+ 	bool enabled = rc.window_effects.enabled
+ 		&& rc.window_effects.layer_shell.enabled && requested;
+ 	float opacity = enabled ? rc.window_effects.layer_shell.opacity : 1.0f;
+-	wlr_scene_node_for_each_buffer(&layer->scene_layer_surface->tree->node,
+-		set_layer_opacity, &opacity);
++	wlr_scene_tree_set_buffer_opacity(
++		layer->scene_layer_surface->tree, opacity);
+ 
+ 	bool blur_enabled = enabled
+ 		&& rc.window_effects.blur_enabled;
+@@ -369,7 +351,11 @@ handle_surface_commit(struct wl_listener *listener, void *data)
+ 
+ 	uint32_t committed = layer_surface->current.committed;
+ 	struct output *output = (struct output *)wlr_output->data;
+-	layer_effects_update(layer);
++	struct wlr_surface *surface = layer_surface->surface;
++	if (layer->effects.width != surface->current.width
++			|| layer->effects.height != surface->current.height) {
++		layer_effects_update(layer);
++	}
+ 
+ 	/* Process layer change */
+ 	if (committed & WLR_LAYER_SURFACE_V1_STATE_LAYER) {
+@@ -808,6 +794,7 @@ handle_new_layer_surface(struct wl_listener *listener, void *data)
+ 		wlr_scene_blur_create(surface->scene_layer_surface->tree, 0, 0);
+ 	die_if_null(surface->effects.blur);
+ 	wlr_scene_node_lower_to_bottom(&surface->effects.blur->node);
++	layer_effects_update(surface);
+ 
+ 	/* In support of IME popup */
+ 	layer_surface->surface->data = surface->scene_layer_surface->tree;
+diff --git a/src/output.c b/src/output.c
+index 001ed04..fd27f2c 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -261,7 +261,6 @@ handle_output_frame(struct wl_listener *listener, void *data)
+ 	struct wlr_scene_output *scene_output = output->scene_output;
+ 	struct wlr_output_state *pending = &output->pending;
+ 
+-	view_effects_update_all();
+ 	pending->tearing_page_flip = output_get_tearing_allowance(output);
+ 
+ 	lab_wlr_scene_output_commit(scene_output, pending);
+diff --git a/src/view.c b/src/view.c
+index 601049d..a3c4977 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -3,7 +3,6 @@
+ #include <assert.h>
+ #include <scenefx/types/wlr_scene.h>
+ #include <strings.h>
+-#include <wlr/types/wlr_alpha_modifier_v1.h>
+ #include <wlr/types/wlr_cursor.h>
+ #include <wlr/types/wlr_keyboard_group.h>
+ #include <wlr/types/wlr_output_layout.h>
+@@ -461,24 +460,6 @@ view_discover_output(struct view *view, struct wlr_box *geometry)
+ 	return false;
+ }
+ 
+-static void
+-set_window_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
+-{
+-	(void)sx;
+-	(void)sy;
+-	float opacity = *(float *)data;
+-	struct wlr_scene_surface *surface =
+-		wlr_scene_surface_try_from_buffer(buffer);
+-	if (surface) {
+-		const struct wlr_alpha_modifier_surface_v1_state *alpha =
+-			wlr_alpha_modifier_v1_get_surface_state(surface->surface);
+-		if (alpha) {
+-			opacity *= alpha->multiplier;
+-		}
+-	}
+-	wlr_scene_buffer_set_opacity(buffer, opacity);
+-}
+-
+ void
+ view_effects_create(struct view *view)
+ {
+@@ -515,8 +496,7 @@ view_effects_update(struct view *view)
+ 			: rc.window_effects.inactive_opacity;
+ 	}
+ 	if (view->content_tree) {
+-		wlr_scene_node_for_each_buffer(&view->content_tree->node,
+-			set_window_opacity, &opacity);
++		wlr_scene_tree_set_buffer_opacity(view->content_tree, opacity);
+ 	}
+ 
+ 	if (!view->effects.blur) {
+@@ -532,7 +512,7 @@ view_effects_update(struct view *view)
+ 	}
+ }
+ 
+-void
++static void
+ view_effects_update_all(void)
+ {
+ 	struct view *view;
+diff --git a/src/xdg.c b/src/xdg.c
+index 4571f02..0ca7929 100644
+--- a/src/xdg.c
++++ b/src/xdg.c
+@@ -1048,6 +1048,7 @@ handle_new_xdg_toplevel(struct wl_listener *listener, void *data)
+ 	die_if_null(tree);
+ 
+ 	view->content_tree = tree;
++	view_effects_update(view);
+ 	node_descriptor_create(&view->scene_tree->node,
+ 		LAB_NODE_VIEW, view, /*data*/ NULL);
+ 
+diff --git a/src/xwayland.c b/src/xwayland.c
+index 4742b0b..705e949 100644
+--- a/src/xwayland.c
++++ b/src/xwayland.c
+@@ -784,6 +784,7 @@ handle_map(struct wl_listener *listener, void *data)
+ 			view->scene_tree, view->surface);
+ 		die_if_null(view->content_tree);
+ 		wlr_scene_subsurface_tree_create(&view->capture.scene->tree, view->surface);
++		view_effects_update(view);
+ 	}
+ 
+ 	wlr_scene_node_set_enabled(&view->content_tree->node, !view->shaded);
+-- 
+2.54.0
+

@@ -1,4 +1,6 @@
 {
+  systemd.user.services.kanshi.Service.RestartSec = 3;
+
   services.kanshi = {
     enable = true;
     settings = [

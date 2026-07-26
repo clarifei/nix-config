@@ -1,6 +1,7 @@
 {
   fetchFromGitHub,
   fetchFromGitLab,
+  glslang,
   labwc,
   lcms2,
   lib,
@@ -33,8 +34,16 @@ let
           rev = "45c69780fc4fe5b9db0c3a1bac2521360b4538fb";
           hash = "sha256-XcYjecZ0xIoJqib0YAn2PZNXyHLOiG4G6J3xKqknNzs=";
         };
-        patches = (old.patches or [ ]) ++ [ ./patches/scenefx-high-precision-blur.patch ];
+        patches = (old.patches or [ ]) ++ [
+          ./patches/scenefx-high-precision-blur.patch
+          ./patches/scenefx-fused-blur-color.patch
+          ./patches/scenefx-scene-tree-opacity.patch
+        ];
         buildInputs = (old.buildInputs or [ ]) ++ [ lcms2 ];
+        nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ glslang ];
+        postPatch = (old.postPatch or "") + ''
+          glslangValidator -S frag render/fx_renderer/shaders/blur2.frag
+        '';
         mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Dexamples=false" ];
       });
 in
@@ -51,6 +60,7 @@ in
     ./patches/labwc-scenefx-renderer.patch
     ./patches/labwc-scenefx-window-effects.patch
     ./patches/labwc-scenefx-background-effects.patch
+    ./patches/labwc-scenefx-effects-optimization.patch
     ./patches/labwc-scenefx-window-effects-docs.patch
     ./patches/labwc-tui-window-switcher.patch
   ];
