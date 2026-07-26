@@ -40,7 +40,7 @@ in
           # Dual-Kawase blur scales exponentially with the number of passes.
           passes = 2;
           radius = 4;
-          noise = 0.02;
+          noise = 0.06;
           brightness = 0.9;
           contrast = 0.9;
           saturation = 1.1;
