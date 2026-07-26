@@ -9,15 +9,23 @@ let
   documentTypes = import ./document-types.nix;
   documentMimeTypes = lib.concatMap (handler: handler.mimeTypes) documentTypes.handlers;
   documentExtensions = lib.concatStringsSep "," documentTypes.extensions;
+  yaziPackage = pkgs.yazi.override {
+    yazi-unwrapped = pkgs.yazi-unwrapped.overrideAttrs (oldAttrs: {
+      patches = (oldAttrs.patches or [ ]) ++ [ ./patches/yazi-square-borders.patch ];
+    });
+  };
 in
 {
   programs.yazi = {
     enable = true;
+    package = yaziPackage;
+    initLua = ./yazi-init.lua;
+    plugins.full-border = pkgs.yaziPlugins.full-border;
     settings = {
       opener = {
         folder = [
           {
-            run = "${pkgs.yazi}/bin/ya emit enter";
+            run = "${lib.getExe' config.programs.yazi.package "ya"} emit enter";
             desc = "enter folder";
           }
         ];

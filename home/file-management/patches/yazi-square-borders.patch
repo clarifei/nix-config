@@ -1,0 +1,104 @@
+diff --git a/yazi-binding/src/elements/border.rs b/yazi-binding/src/elements/border.rs
+index 7e342862..7c8964a4 100644
+--- a/yazi-binding/src/elements/border.rs
++++ b/yazi-binding/src/elements/border.rs
+@@ -26,7 +26,7 @@ pub struct Border {
+ impl Border {
+ 	pub fn compose(lua: &Lua) -> mlua::Result<Value> {
+ 		let new = lua.create_function(|_, (_, edge): (Table, Edge)| {
+-			Ok(Self { edge, r#type: ratatui::widgets::BorderType::Rounded, ..Default::default() })
++			Ok(Self { edge, r#type: ratatui::widgets::BorderType::Plain, ..Default::default() })
+ 		})?;
+ 
+ 		let border = lua.create_table_from([
+diff --git a/yazi-fm/src/cmp/cmp.rs b/yazi-fm/src/cmp/cmp.rs
+index 399b5b94..254c4a48 100644
+--- a/yazi-fm/src/cmp/cmp.rs
++++ b/yazi-fm/src/cmp/cmp.rs
+@@ -55,7 +55,7 @@ impl Widget for Cmp<'_> {
+ 		yazi_widgets::Clear.render(area, buf);
+ 		List::new(items)
+ 			.block(
+-				Block::bordered().border_type(BorderType::Rounded).border_style(THEME.cmp.border.get()),
++				Block::bordered().border_type(BorderType::Plain).border_style(THEME.cmp.border.get()),
+ 			)
+ 			.render(area, buf);
+ 	}
+diff --git a/yazi-fm/src/confirm/confirm.rs b/yazi-fm/src/confirm/confirm.rs
+index 6996fa81..201f9cf4 100644
+--- a/yazi-fm/src/confirm/confirm.rs
++++ b/yazi-fm/src/confirm/confirm.rs
+@@ -18,7 +18,7 @@ impl Widget for Confirm<'_> {
+ 		yazi_widgets::Clear.render(area, buf);
+ 
+ 		Block::bordered()
+-			.border_type(BorderType::Rounded)
++			.border_type(BorderType::Plain)
+ 			.border_style(THEME.confirm.border.get())
+ 			.title(confirm.title.clone().style(THEME.confirm.title.get().derive(confirm.title.style)))
+ 			.title_alignment(Alignment::Center)
+diff --git a/yazi-fm/src/input/input.rs b/yazi-fm/src/input/input.rs
+index b5b3cb4e..db962f73 100644
+--- a/yazi-fm/src/input/input.rs
++++ b/yazi-fm/src/input/input.rs
+@@ -18,7 +18,7 @@ impl Widget for Input<'_> {
+ 		yazi_widgets::Clear.render(area, buf);
+ 
+ 		Block::bordered()
+-			.border_type(BorderType::Rounded)
++			.border_type(BorderType::Plain)
+ 			.border_style(THEME.input.border.get())
+ 			.title(Line::styled(&input.title, THEME.input.title.get()))
+ 			.render(area, buf);
+diff --git a/yazi-fm/src/notify/notify.rs b/yazi-fm/src/notify/notify.rs
+index c2ba11ad..f46a5535 100644
+--- a/yazi-fm/src/notify/notify.rs
++++ b/yazi-fm/src/notify/notify.rs
+@@ -48,7 +48,7 @@ impl Widget for Notify<'_> {
+ 				.wrap(Wrap { trim: false })
+ 				.block(
+ 					Block::bordered()
+-						.border_type(BorderType::Rounded)
++						.border_type(BorderType::Plain)
+ 						.title(format!("{} {}", m.level.icon(), m.title))
+ 						.title_style(m.level.style())
+ 						.border_style(m.level.style()),
+diff --git a/yazi-fm/src/pick/pick.rs b/yazi-fm/src/pick/pick.rs
+index 42c3cce6..5f28d239 100644
+--- a/yazi-fm/src/pick/pick.rs
++++ b/yazi-fm/src/pick/pick.rs
+@@ -21,7 +21,7 @@ impl Widget for Pick<'_> {
+ 
+ 		Block::bordered()
+ 			.title(pick.title())
+-			.border_type(BorderType::Rounded)
++			.border_type(BorderType::Plain)
+ 			.border_style(THEME.pick.border.get())
+ 			.render(area, buf);
+ 
+diff --git a/yazi-fm/src/tasks/tasks.rs b/yazi-fm/src/tasks/tasks.rs
+index 9f40c4cf..47915317 100644
+--- a/yazi-fm/src/tasks/tasks.rs
++++ b/yazi-fm/src/tasks/tasks.rs
+@@ -37,7 +37,7 @@ impl Widget for Tasks<'_> {
+ 		let block = Block::bordered()
+ 			.title(Line::styled("Tasks", THEME.tasks.title.get()))
+ 			.title_alignment(Alignment::Center)
+-			.border_type(BorderType::Rounded)
++			.border_type(BorderType::Plain)
+ 			.border_style(THEME.tasks.border.get());
+ 		(&block).render(area, buf);
+ 
+diff --git a/yazi-plugin/src/utils/spot.rs b/yazi-plugin/src/utils/spot.rs
+index 44db4d85..45055fa4 100644
+--- a/yazi-plugin/src/utils/spot.rs
++++ b/yazi-plugin/src/utils/spot.rs
+@@ -20,7 +20,7 @@ impl Utils {
+ 				Renderable::Border(yazi_binding::elements::Border {
+ 					area,
+ 					edge: Edge(ratatui::widgets::Borders::ALL),
+-					r#type: ratatui::widgets::BorderType::Rounded,
++					r#type: ratatui::widgets::BorderType::Plain,
+ 					style: THEME.spot.border.get().into(),
+ 					titles: vec![(
+ 						ratatui::widgets::TitlePosition::Top,

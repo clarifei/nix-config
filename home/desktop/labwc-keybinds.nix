@@ -1,4 +1,5 @@
 {
+  config,
   lib,
   pkgs,
   ...
@@ -47,7 +48,7 @@ in
       }
       {
         "@key" = "W-e";
-        action = execute "foot --app-id=yazi ${lib.getExe pkgs.yazi}";
+        action = execute "foot --app-id=yazi ${lib.getExe config.programs.yazi.package}";
       }
 
       # window management

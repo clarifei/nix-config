@@ -25,7 +25,7 @@ let
         fzf \
           --no-multi \
           --layout=reverse \
-          --border \
+          --border=sharp \
           --info=inline-right \
           --prompt='Share: ' \
           --pointer='>' \

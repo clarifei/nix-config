@@ -1,4 +1,5 @@
 {
+  config,
   lib,
   pkgs,
   ...
@@ -13,7 +14,7 @@ let
       pkgs.file
       pkgs.foot
       pkgs.libnotify
-      pkgs.yazi
+      config.programs.yazi.package
     ];
     text = ''
       if (( $# < 6 || $# > 7 )); then
@@ -160,7 +161,7 @@ let
         foot \
           --app-id=yazi-file-chooser \
           --title="$title" \
-          yazi "''${chooser_args[@]}" || status=$?
+          ${lib.getExe config.programs.yazi.package} "''${chooser_args[@]}" || status=$?
 
         if (( status != 0 )); then
           exit "$status"
