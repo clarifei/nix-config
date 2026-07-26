@@ -27,8 +27,9 @@ diff --git a/src/screencast/screencast.c b/src/screencast/screencast.c
 @@ -160,7 +160,7 @@ bool setup_target(struct xdpw_screencast_context *ctx, struct xdpw_session *sess,
  	}
  	target->with_cursor = sess->screencast_data.cursor_mode == EMBEDDED;
- 	if (data) {
+-	if (data) {
 -		target_initialized = xdpw_wlr_target_from_data(ctx, target, data);
++	if (data && sess->screencast_data.persist_mode != PERSIST_NONE) {
 +		target_initialized = xdpw_wlr_target_from_data(ctx, target, data, type_mask);
  	}
  	if (!target_initialized) {

@@ -67,6 +67,33 @@
             touch "$out"
           '';
 
+          vesktop-square-splash = pkgs.runCommand "vesktop-square-splash-test" {
+            nativeBuildInputs = [
+              pkgs.gnugrep
+              pkgs.patch
+            ];
+          } ''
+            cp -r ${pkgs.vesktop.src} source
+            chmod -R u+w source
+            patch --directory=source --strip=1 < ${./modules/patches/vesktop-square-splash.patch}
+            grep -Fq 'border-radius: 0;' source/static/views/splash.html
+            touch "$out"
+          '';
+
+          xdpw-restore-data-gate = pkgs.runCommand "xdpw-restore-data-gate-test" {
+            nativeBuildInputs = [
+              pkgs.gnugrep
+              pkgs.patch
+            ];
+          } ''
+            cp -r ${pkgs.xdg-desktop-portal-wlr.src} source
+            chmod -R u+w source
+            patch --directory=source --strip=1 < ${./modules/patches/xdpw-window-restore.patch}
+            grep -Fq 'if (data && sess->screencast_data.persist_mode != PERSIST_NONE)' \
+              source/src/screencast/screencast.c
+            touch "$out"
+          '';
+
           xdpw-foot-chooser = pkgs.callPackage ./tests/xdpw-foot-chooser.nix { };
         };
 
