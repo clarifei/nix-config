@@ -1,35 +1,55 @@
+diff --git a/include/action.h b/include/action.h
+index b09aa35..7d1a1ab 100644
+--- a/include/action.h
++++ b/include/action.h
+@@ -52,6 +52,9 @@ void actions_run(struct view *activator, struct wl_list *actions, struct cursor_
+ void action_prompts_destroy(void);
+ bool action_check_prompt_result(pid_t pid, int exit_code);
+ 
++void window_switcher_init(void);
++void window_switcher_finish(void);
++
+ void action_free(struct action *action);
+ void action_list_free(struct wl_list *action_list);
+ 
 diff --git a/include/input/keyboard.h b/include/input/keyboard.h
-index 6836d9b..f1f13b8 100644
+index 6836d9b..7c3a7ae 100644
 --- a/include/input/keyboard.h
 +++ b/include/input/keyboard.h
-@@ -25,6 +25,8 @@ struct keyboard {
+@@ -25,6 +25,9 @@ struct keyboard {
  };
  
  void keyboard_reset_current_keybind(void);
 +void keyboard_reset_modifiers_release_command(void);
++bool keyboard_modifiers_release_command_is_pending(void);
 +void keyboard_execute_on_modifiers_release(const char *command);
  void keyboard_configure(struct seat *seat, struct wlr_keyboard *kb,
  	bool is_virtual);
  
 diff --git a/src/action.c b/src/action.c
-index ccf5e81..76cd6e9 100644
+index ccf5e81..94cac78 100644
 --- a/src/action.c
 +++ b/src/action.c
-@@ -2,9 +2,13 @@
+@@ -2,9 +2,18 @@
  #define _POSIX_C_SOURCE 200809L
  #include "action.h"
  #include <assert.h>
++#include <errno.h>
 +#include <fcntl.h>
 +#include <inttypes.h>
++#include <linux/magic.h>
  #include <signal.h>
 +#include <stdio.h>
++#include <stdlib.h>
  #include <string.h>
  #include <strings.h>
++#include <sys/pidfd.h>
 +#include <sys/stat.h>
++#include <sys/vfs.h>
  #include <unistd.h>
  #include <wlr/types/wlr_cursor.h>
  #include <scenefx/types/wlr_scene.h>
-@@ -76,6 +80,8 @@ struct action_arg_list {
+@@ -76,6 +85,8 @@ struct action_arg_list {
  	X(KILL, "Kill") \
  	X(DEBUG, "Debug") \
  	X(EXECUTE, "Execute") \
@@ -38,7 +58,7 @@ index ccf5e81..76cd6e9 100644
  	X(EXIT, "Exit") \
  	X(MOVE_TO_EDGE, "MoveToEdge") \
  	X(TOGGLE_SNAP_TO_EDGE, "ToggleSnapToEdge") \
-@@ -299,6 +305,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
+@@ -299,6 +310,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
  
  	switch (action->type) {
  	case ACTION_TYPE_EXECUTE:
@@ -46,7 +66,7 @@ index ccf5e81..76cd6e9 100644
  		/*
  		 * <action name="Execute"> with an <execute> child is
  		 * deprecated, but we support it anyway for backward
-@@ -632,6 +639,7 @@ action_is_valid(struct action *action)
+@@ -632,6 +644,7 @@ action_is_valid(struct action *action)
  
  	switch (action->type) {
  	case ACTION_TYPE_EXECUTE:
@@ -54,23 +74,253 @@ index ccf5e81..76cd6e9 100644
  		arg_name = "command";
  		break;
  	case ACTION_TYPE_MOVE_TO_EDGE:
-@@ -1055,6 +1063,97 @@ warp_cursor(struct view *view, const char *to, const char *x, const char *y)
+@@ -1055,6 +1068,322 @@ warp_cursor(struct view *view, const char *to, const char *x, const char *y)
  	cursor_update_focus();
  }
  
-+static void
-+export_window_list(void)
++static struct wl_event_source *window_switcher_signal_source;
++static uint64_t window_switcher_instance;
++static uint64_t window_switcher_pidfd_inode;
++static uint64_t window_switcher_generation_counter;
++static int window_switcher_pidfd = -1;
++static char window_switcher_generation[96];
++
++static bool
++window_switcher_path(struct buf *path, const char *kind,
++	const char *generation)
 +{
 +	const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
 +	if (!runtime_dir || runtime_dir[0] != '/') {
 +		wlr_log(WLR_ERROR,
-+			"Cannot export window list without an absolute XDG_RUNTIME_DIR");
-+		return;
++			"Cannot use window switcher without an absolute XDG_RUNTIME_DIR");
++		return false;
++	}
++	buf_add_fmt(path, "%s/labwc-window-switcher-%s.%s",
++		runtime_dir, kind, generation);
++	return true;
++}
++
++static int
++handle_window_switcher_focus(int signal, void *data)
++{
++	(void)signal;
++	(void)data;
++
++	if (!window_switcher_generation[0]) {
++		return 0;
 +	}
 +
 +	struct buf path = BUF_INIT;
++	if (!window_switcher_path(&path, "focus", window_switcher_generation)) {
++		return 0;
++	}
++
++	int fd = open(path.data, O_RDWR | O_CLOEXEC | O_NOFOLLOW);
++	if (fd < 0) {
++		if (errno != ENOENT) {
++			wlr_log_errno(WLR_ERROR, "Failed to open window focus request");
++		}
++		goto cleanup;
++	}
++
++	struct stat stat_buffer = {0};
++	char request[32];
++	ssize_t length = -1;
++	if (fstat(fd, &stat_buffer) == 0
++			&& S_ISREG(stat_buffer.st_mode)
++			&& stat_buffer.st_uid == geteuid()
++			&& stat_buffer.st_size > 0
++			&& stat_buffer.st_size < (off_t)sizeof(request)) {
++		length = 0;
++		while (length < stat_buffer.st_size) {
++			ssize_t count = read(fd, request + length,
++				stat_buffer.st_size - length);
++			if (count < 0 && errno == EINTR) {
++				continue;
++			}
++			if (count <= 0) {
++				length = -1;
++				break;
++			}
++			length += count;
++		}
++	}
++	if (length <= 0 || length != stat_buffer.st_size) {
++		wlr_log(WLR_ERROR, "Invalid window focus request");
++		goto reject;
++	}
++	request[length] = '\0';
++
++	errno = 0;
++	char *end = NULL;
++	uintmax_t id = strtoumax(request, &end, 10);
++	if (errno || end == request || id > UINT64_MAX
++			|| (*end && !(*end == '\n' && !end[1]))) {
++		wlr_log(WLR_ERROR, "Invalid window id in focus request");
++		goto reject;
++	}
++
++	bool focused = false;
++	struct view *view;
++	for_each_view(view, &server.views, LAB_VIEW_CRITERIA_NONE) {
++		if (view->creation_id == (uint64_t)id) {
++			desktop_focus_view(view, /*raise*/ true);
++			focused = true;
++			break;
++		}
++	}
++	if (focused) {
++		close(fd);
++		unlink(path.data);
++		goto cleanup;
++	}
++
++reject:
++	if (ftruncate(fd, 0) < 0) {
++		wlr_log_errno(WLR_ERROR, "Failed to reject window focus request");
++	}
++	close(fd);
++cleanup:
++	buf_reset(&path);
++	return 0;
++}
++
++static uint64_t
++read_process_start_time(void)
++{
++	FILE *stream = fopen("/proc/self/stat", "r");
++	if (!stream) {
++		return 0;
++	}
++
++	char *line = NULL;
++	size_t capacity = 0;
++	ssize_t length = getline(&line, &capacity, stream);
++	fclose(stream);
++	if (length <= 0) {
++		free(line);
++		return 0;
++	}
++
++	/* Fields after comm start at process state (field 3). */
++	char *field = strrchr(line, ')');
++	if (!field || field[1] != ' ') {
++		free(line);
++		return 0;
++	}
++	field += 2;
++	for (int i = 0; i < 19; ++i) {
++		field = strchr(field, ' ');
++		if (!field) {
++			free(line);
++			return 0;
++		}
++		field += strspn(field, " ");
++	}
++
++	errno = 0;
++	char *end = NULL;
++	uintmax_t value = strtoumax(field, &end, 10);
++	bool valid = !errno && end != field && value <= UINT64_MAX
++		&& (*end == ' ' || *end == '\n' || !*end);
++	free(line);
++	return valid ? (uint64_t)value : 0;
++}
++
++void
++window_switcher_init(void)
++{
++	unsetenv("LABWC_WINDOW_SWITCHER_GENERATION");
++	window_switcher_instance = read_process_start_time();
++	if (!window_switcher_instance) {
++		wlr_log(WLR_ERROR, "Failed to read Labwc process start time");
++		return;
++	}
++
++	window_switcher_pidfd = pidfd_open(getpid(), 0);
++	if (window_switcher_pidfd < 0) {
++		wlr_log_errno(WLR_ERROR, "Failed to open Labwc pidfd");
++		return;
++	}
++	struct statfs pidfd_fs = {0};
++	if (fstatfs(window_switcher_pidfd, &pidfd_fs) < 0
++			|| pidfd_fs.f_type != PID_FS_MAGIC) {
++		wlr_log(WLR_ERROR, "Labwc pidfd is not backed by pidfs");
++		close(window_switcher_pidfd);
++		window_switcher_pidfd = -1;
++		return;
++	}
++	struct stat pidfd_stat = {0};
++	if (fstat(window_switcher_pidfd, &pidfd_stat) < 0) {
++		wlr_log_errno(WLR_ERROR, "Failed to inspect Labwc pidfd");
++		close(window_switcher_pidfd);
++		window_switcher_pidfd = -1;
++		return;
++	}
++	window_switcher_pidfd_inode = pidfd_stat.st_ino;
++	if (!window_switcher_pidfd_inode) {
++		wlr_log(WLR_ERROR, "Labwc pidfd has no stable inode");
++		close(window_switcher_pidfd);
++		window_switcher_pidfd = -1;
++		return;
++	}
++
++	window_switcher_signal_source = wl_event_loop_add_signal(
++		server.wl_event_loop, SIGUSR1, handle_window_switcher_focus, NULL);
++	if (!window_switcher_signal_source) {
++		wlr_log(WLR_ERROR, "Failed to register window-switcher signal");
++		close(window_switcher_pidfd);
++		window_switcher_pidfd = -1;
++	}
++}
++
++void
++window_switcher_finish(void)
++{
++	keyboard_reset_modifiers_release_command();
++	if (window_switcher_signal_source) {
++		wl_event_source_remove(window_switcher_signal_source);
++		window_switcher_signal_source = NULL;
++	}
++	if (window_switcher_pidfd >= 0) {
++		close(window_switcher_pidfd);
++		window_switcher_pidfd = -1;
++	}
++	unsetenv("LABWC_WINDOW_SWITCHER_GENERATION");
++}
++
++static bool
++write_window_field(FILE *stream, const char *field)
++{
++	size_t length = strlen(field);
++	return fwrite(field, 1, length, stream) == length
++		&& fputc('\0', stream) != EOF;
++}
++
++static void
++export_window_list(void)
++{
++	window_switcher_generation[0] = '\0';
++	unsetenv("LABWC_WINDOW_SWITCHER_GENERATION");
++	if (!window_switcher_signal_source) {
++		return;
++	}
++
++	uint64_t next_generation = window_switcher_generation_counter + 1;
++	if (!next_generation) {
++		next_generation = 1;
++	}
++	char generation[96];
++	snprintf(generation, sizeof(generation), "%ld-%llu-%llu-%llu",
++		(long)getpid(), (unsigned long long)window_switcher_instance,
++		(unsigned long long)window_switcher_pidfd_inode,
++		(unsigned long long)next_generation);
++
++	struct buf path = BUF_INIT;
 +	struct buf temporary_path = BUF_INIT;
-+	buf_add_fmt(&path, "%s/labwc-window-switcher-windows", runtime_dir);
++	if (!window_switcher_path(&path, "windows", generation)) {
++		goto cleanup;
++	}
 +	buf_add_fmt(&temporary_path, "%s.tmp", path.data);
 +
 +	int fd = open(temporary_path.data,
@@ -98,36 +348,23 @@ index ccf5e81..76cd6e9 100644
 +		| LAB_VIEW_CRITERIA_NO_DIALOG;
 +	struct view *view;
 +	for_each_view(view, &server.views, criteria) {
-+
 +		char id[32];
-+		snprintf(id, sizeof(id), "%" PRIu64, view->creation_id);
++		snprintf(id, sizeof(id), "%llu",
++			(unsigned long long)view->creation_id);
 +		const char *active = view == server.active_view ? "1" : "0";
 +		const char *workspace = view->visible_on_all_workspaces
 +			? "*"
 +			: view->workspace->name;
-+		const char *fields[] = {
-+			id, active, workspace, view->app_id, view->title
-+		};
-+
-+		for (size_t i = 0; i < ARRAY_SIZE(fields); ++i) {
-+			size_t len = strlen(fields[i]);
-+			if (fwrite(fields[i], 1, len, stream) != len
-+					|| fputc('\0', stream) == EOF) {
-+				success = false;
-+				break;
-+			}
-+		}
-+		if (!success) {
++		if (!write_window_field(stream, id)
++				|| !write_window_field(stream, active)
++				|| !write_window_field(stream, workspace)
++				|| !write_window_field(stream, view->app_id)
++				|| !write_window_field(stream, view->title)) {
++			success = false;
 +			break;
 +		}
 +	}
 +
-+	if (success && fflush(stream) < 0) {
-+		success = false;
-+	}
-+	if (success && fsync(fd) < 0) {
-+		success = false;
-+	}
 +	if (fclose(stream) < 0) {
 +		success = false;
 +	}
@@ -140,6 +377,14 @@ index ccf5e81..76cd6e9 100644
 +		wlr_log_errno(WLR_ERROR, "Failed to publish window-list export");
 +		goto unlink_temporary;
 +	}
++	if (setenv("LABWC_WINDOW_SWITCHER_GENERATION", generation, true) < 0) {
++		wlr_log_errno(WLR_ERROR, "Failed to publish window-list generation");
++		unlink(path.data);
++		goto cleanup;
++	}
++	window_switcher_generation_counter = next_generation;
++	snprintf(window_switcher_generation,
++		sizeof(window_switcher_generation), "%s", generation);
 +	goto cleanup;
 +
 +unlink_temporary:
@@ -152,7 +397,7 @@ index ccf5e81..76cd6e9 100644
  static void
  run_action(struct view *view, struct action *action,
  	struct cursor_context *ctx)
-@@ -1088,6 +1187,13 @@ run_action(struct view *view, struct action *action,
+@@ -1088,6 +1417,15 @@ run_action(struct view *view, struct action *action,
  		buf_reset(&cmd);
  		break;
  	}
@@ -161,13 +406,15 @@ index ccf5e81..76cd6e9 100644
 +			action_get_str(action, "command", NULL));
 +		break;
 +	case ACTION_TYPE_EXPORT_WINDOW_LIST:
-+		export_window_list();
++		if (!keyboard_modifiers_release_command_is_pending()) {
++			export_window_list();
++		}
 +		break;
  	case ACTION_TYPE_EXIT:
  		wl_display_terminate(server.wl_display);
  		break;
 diff --git a/src/input/keyboard.c b/src/input/keyboard.c
-index 3688414..8c0a6f5 100644
+index 3688414..f3b9b40 100644
 --- a/src/input/keyboard.c
 +++ b/src/input/keyboard.c
 @@ -9,6 +9,8 @@
@@ -179,34 +426,56 @@ index 3688414..8c0a6f5 100644
  #include "config/keybind.h"
  #include "config/rcxml.h"
  #include "cycle.h"
-@@ -47,6 +49,7 @@ struct keyinfo {
+@@ -45,8 +47,10 @@ struct keyinfo {
+ };
+ 
  static bool should_cancel_cycling_on_next_key_release;
++static bool should_execute_modifiers_release_command_on_next_key_release;
  
  static struct keybind *cur_keybind;
 +static char *modifiers_release_command;
  
  /* Called on --reconfigure to prevent segfault when handling release keybinds */
  void
-@@ -55,6 +58,18 @@ keyboard_reset_current_keybind(void)
+@@ -55,6 +59,37 @@ keyboard_reset_current_keybind(void)
  	cur_keybind = NULL;
  }
  
 +void
 +keyboard_reset_modifiers_release_command(void)
 +{
++	should_execute_modifiers_release_command_on_next_key_release = false;
 +	zfree(modifiers_release_command);
++}
++
++bool
++keyboard_modifiers_release_command_is_pending(void)
++{
++	return modifiers_release_command;
 +}
 +
 +void
 +keyboard_execute_on_modifiers_release(const char *command)
 +{
++	should_execute_modifiers_release_command_on_next_key_release = false;
 +	xstrdup_replace(modifiers_release_command, command);
++}
++
++static void
++execute_modifiers_release_command(void)
++{
++	assert(modifiers_release_command);
++	char *command = modifiers_release_command;
++	modifiers_release_command = NULL;
++	should_execute_modifiers_release_command_on_next_key_release = false;
++	spawn_async_no_shell(command);
++	free(command);
 +}
 +
  static void
  change_vt(unsigned int vt)
  {
-@@ -149,9 +164,10 @@ handle_modifiers(struct wl_listener *listener, void *data)
+@@ -149,9 +184,10 @@ handle_modifiers(struct wl_listener *listener, void *data)
  	}
  
  	bool cycling = server.input_mode == LAB_INPUT_STATE_CYCLE;
@@ -218,29 +487,52 @@ index 3688414..8c0a6f5 100644
  		if (cycling) {
  			if (key_state_nr_bound_keys()) {
  				should_cancel_cycling_on_next_key_release = true;
-@@ -165,6 +181,13 @@ handle_modifiers(struct wl_listener *listener, void *data)
+@@ -165,6 +201,14 @@ handle_modifiers(struct wl_listener *listener, void *data)
  		}
  	}
  
 +	if (modifiers_release_command && !modifiers) {
-+		char *command = modifiers_release_command;
-+		modifiers_release_command = NULL;
-+		spawn_async_no_shell(command);
-+		free(command);
++		if (key_state_nr_bound_keys()) {
++			should_execute_modifiers_release_command_on_next_key_release = true;
++		} else {
++			execute_modifiers_release_command();
++		}
 +	}
 +
  	if (!input_method_keyboard_grab_forward_modifiers(keyboard)) {
  		/* Send modifiers to focused client */
  		wlr_seat_keyboard_notify_modifiers(seat->wlr_seat,
-diff --git a/src/seat.c b/src/seat.c
-index fe85dc2..67eb4f3 100644
---- a/src/seat.c
-+++ b/src/seat.c
-@@ -753,6 +753,7 @@ seat_reconfigure(void)
- 	cursor_reload(seat);
- 	overlay_finish(seat);
- 	keyboard_reset_current_keybind();
-+	keyboard_reset_modifiers_release_command();
- 	wl_list_for_each(input, &seat->inputs, link) {
- 		switch (input->wlr_input_device->type) {
- 		case WLR_INPUT_DEVICE_KEYBOARD:
+@@ -404,6 +448,13 @@ handle_key_release(uint32_t evdev_keycode)
+ 	 * not forward the corresponding release event to clients.
+ 	 */
+ 	key_state_bound_key_remove(evdev_keycode);
++	if (should_execute_modifiers_release_command_on_next_key_release
++			&& !key_state_nr_bound_keys()) {
++		should_execute_modifiers_release_command_on_next_key_release = false;
++		if (!keyboard_get_all_modifiers(&server.seat)) {
++			execute_modifiers_release_command();
++		}
++	}
+ 	return LAB_KEY_HANDLED_TRUE;
+ }
+ 
+diff --git a/src/server.c b/src/server.c
+index 83b6f0c..ed00452 100644
+--- a/src/server.c
++++ b/src/server.c
+@@ -474,6 +474,7 @@ server_init(void)
+ 		server.wl_event_loop, SIGTERM, handle_sigterm, server.wl_display);
+ 	server.sigchld_source = wl_event_loop_add_signal(
+ 		server.wl_event_loop, SIGCHLD, handle_sigchld, NULL);
++	window_switcher_init();
+ 
+ 	/*
+ 	 * Prevent wayland clients that request the X11 clipboard but closing
+@@ -855,6 +856,7 @@ server_finish(void)
+ #if HAVE_LIBSFDO
+ 	desktop_entry_finish();
+ #endif
++	window_switcher_finish();
+ 	wl_event_source_remove(server.sighup_source);
+ 	wl_event_source_remove(server.sigint_source);
+ 	wl_event_source_remove(server.sigterm_source);
