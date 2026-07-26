@@ -4,6 +4,21 @@ Date: Sun, 26 Jul 2026 23:15:40 +0700
 Subject: [PATCH 3/3] Document SceneFX window effects
 
 
+diff --git a/docs/labwc-actions.5.scd b/docs/labwc-actions.5.scd
+index 2677e34..4d7ded0 100644
+--- a/docs/labwc-actions.5.scd
++++ b/docs/labwc-actions.5.scd
+@@ -202,6 +202,10 @@ argument. Default is "center".
+ </keybind>
+ ```
+ 
++*<action name="ToggleWindowEffects" />*
++	Toggle the configured opacity and blur effects for the focused window.
++	Fullscreen windows remain opaque with blur disabled.
++
+ *<action name="SetDecorations" decorations="value" forceSSD="no" />*
+ 	Set decorations of focused window.
+ 
 diff --git a/docs/labwc-config.5.scd b/docs/labwc-config.5.scd
 index 6a16b89..97d4e1b 100644
 --- a/docs/labwc-config.5.scd

@@ -87,6 +87,10 @@ in
         };
       }
       {
+        "@key" = "W-S-d";
+        action = action "ToggleWindowEffects" { };
+      }
+      {
         "@key" = "W-h";
         action = action "SnapToEdge" { "@direction" = "left"; };
       }
