@@ -77,6 +77,9 @@
             chmod -R u+w source
             patch --directory=source --strip=1 < ${./modules/patches/vesktop-square-splash.patch}
             grep -Fq 'border-radius: 0;' source/static/views/splash.html
+            grep -Fq 'border: 0;' source/static/views/splash.html
+            grep -Fq 'background: var(--bg);' source/static/views/splash.html
+            grep -Fq 'hasShadow: false' source/src/main/splash.ts
             touch "$out"
           '';
 
