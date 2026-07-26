@@ -24,6 +24,20 @@
           showTitle = "yes";
         };
       };
+      windowEffects = {
+        enabled = "yes";
+        activeOpacity = 0.96;
+        inactiveOpacity = 0.92;
+        blur = {
+          enabled = "yes";
+          passes = 3;
+          radius = 5;
+          noise = 0.02;
+          brightness = 0.9;
+          contrast = 0.9;
+          saturation = 1.1;
+        };
+      };
       windowRules.windowRule = {
         "@identifier" = "*";
         "@serverDecoration" = "yes";

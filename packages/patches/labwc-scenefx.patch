@@ -1,0 +1,952 @@
+diff --git a/docs/labwc-config.5.scd b/docs/labwc-config.5.scd
+index 6a16b89..97d4e1b 100644
+--- a/docs/labwc-config.5.scd
++++ b/docs/labwc-config.5.scd
+@@ -679,6 +679,40 @@ extending outward from the snapped edge.
+ 	Font weight (normal, thin, ultralight, light, semilight, book, medium,
+ 	semibold, bold, ultrabold, heavy, ultraheavy). Default is normal.
+ 
++## WINDOW EFFECTS
++
++Window effects apply to the content of regular Wayland and XWayland windows.
++Layer-shell surfaces, popups, menus, server-side decorations and captured
++window content are unaffected. Fullscreen windows are always opaque and have
++blur disabled to preserve direct scanout.
++
++*<windowEffects><enabled>* [yes|no]
++	Enable window opacity and blur. Default is no.
++
++*<windowEffects><activeOpacity>*
++	Opacity of the active window, between 0.0 and 1.0. Default is 1.0.
++
++*<windowEffects><inactiveOpacity>*
++	Opacity of inactive windows, between 0.0 and 1.0. Default is 1.0.
++
++*<windowEffects><blur><enabled>* [yes|no]
++	Blur the scene behind translucent windows. Default is no.
++
++*<windowEffects><blur><passes>*
++	Number of blur passes, between 0 and 10. Default is 3.
++
++*<windowEffects><blur><radius>*
++	Blur radius, between 0 and 10. Default is 5.
++
++*<windowEffects><blur><noise>*
++	Noise applied to the blur, between 0.0 and 1.0. Default is 0.02.
++
++*<windowEffects><blur><brightness>*++
++*<windowEffects><blur><contrast>*++
++*<windowEffects><blur><saturation>*
++	Blur color adjustments, each between 0.0 and 2.0. Defaults are 0.9,
++	0.9 and 1.1, respectively.
++
+ ## MARGIN
+ 
+ *<margin top="" bottom="" left="" right="" output="" />*
+diff --git a/docs/rc.xml.all b/docs/rc.xml.all
+index 350d2ea..de4dd66 100644
+--- a/docs/rc.xml.all
++++ b/docs/rc.xml.all
+@@ -78,6 +78,21 @@
+     </font>
+   </theme>
+ 
++  <windowEffects>
++    <enabled>no</enabled>
++    <activeOpacity>1.0</activeOpacity>
++    <inactiveOpacity>1.0</inactiveOpacity>
++    <blur>
++      <enabled>no</enabled>
++      <passes>3</passes>
++      <radius>5</radius>
++      <noise>0.02</noise>
++      <brightness>0.9</brightness>
++      <contrast>0.9</contrast>
++      <saturation>1.1</saturation>
++    </blur>
++  </windowEffects>
++
+   <windowSwitcher preview="yes" outlines="yes" unshade="yes">
+     <osd show="yes" style="classic" output="all" thumbnailLabelFormat="%T" />
+     <fields>
+diff --git a/include/config/rcxml.h b/include/config/rcxml.h
+index 9c2183a..792a649 100644
+--- a/include/config/rcxml.h
++++ b/include/config/rcxml.h
+@@ -115,6 +115,18 @@ struct rcxml {
+ 	bool ssd_keep_border;
+ 	bool shadows_enabled;
+ 	bool shadows_on_tiled;
++	struct {
++		bool enabled;
++		float active_opacity;
++		float inactive_opacity;
++		bool blur_enabled;
++		int blur_passes;
++		int blur_radius;
++		float blur_noise;
++		float blur_brightness;
++		float blur_contrast;
++		float blur_saturation;
++	} window_effects;
+ 	struct font font_activewindow;
+ 	struct font font_inactivewindow;
+ 	struct font font_menuheader;
+diff --git a/include/view.h b/include/view.h
+index 46943ab..e193713 100644
+--- a/include/view.h
++++ b/include/view.h
+@@ -172,6 +172,10 @@ struct view {
+ 	struct wlr_surface *surface;
+ 	struct wlr_scene_tree *scene_tree;
+ 	struct wlr_scene_tree *content_tree; /* may be NULL for unmapped view */
++	struct {
++		struct wlr_scene_blur *blur;
++		bool activated;
++	} effects;
+ 
+ 	/* These are never NULL and an empty string is set instead. */
+ 	char *title;
+@@ -478,6 +482,10 @@ void view_toggle_keybinds(struct view *view);
+ bool view_inhibits_actions(struct view *view, struct wl_list *actions);
+ 
+ void view_set_activated(struct view *view, bool activated);
++void view_effects_create(struct view *view);
++void view_effects_update(struct view *view);
++void view_effects_update_all(void);
++void view_effects_reconfigure(void);
+ void view_set_output(struct view *view, struct output *output);
+ void view_close(struct view *view);
+ 
+diff --git a/meson.build b/meson.build
+index d85823c..c323b5b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -56,6 +56,12 @@ wlroots = dependency(
+   version: ['>=0.20.1', '<0.21.0'],
+ )
+ 
++scenefx = dependency('scenefx-0.5')
++add_project_arguments(
++  '-DSCENEFX_VERSION="@0@"'.format(scenefx.version()),
++  language: 'c',
++)
++
+ wlroots_has_xwayland = wlroots.get_variable('have_xwayland') == 'true'
+ have_libsfdo = not get_option('icon').disabled()
+ 
+@@ -161,6 +167,7 @@ subdir('protocols')
+ labwc_deps = [
+   server_protos,
+   wayland_server,
++  scenefx,
+   wlroots,
+   xkbcommon,
+ 	xcb_ewmh,
+diff --git a/src/action.c b/src/action.c
+index 265ff6e..412d25a 100644
+--- a/src/action.c
++++ b/src/action.c
+@@ -7,7 +7,7 @@
+ #include <strings.h>
+ #include <unistd.h>
+ #include <wlr/types/wlr_cursor.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/log.h>
+ #include "action-prompt-codes.h"
+ #include "common/buf.h"
+diff --git a/src/common/lab-scene-rect.c b/src/common/lab-scene-rect.c
+index 6689d48..99309c5 100644
+--- a/src/common/lab-scene-rect.c
++++ b/src/common/lab-scene-rect.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ #include "common/lab-scene-rect.h"
+ #include <assert.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "common/mem.h"
+ #include "common/scene-helpers.h"
+ 
+diff --git a/src/common/scene-helpers.c b/src/common/scene-helpers.c
+index e9c80bb..4051346 100644
+--- a/src/common/scene-helpers.c
++++ b/src/common/scene-helpers.c
+@@ -3,7 +3,7 @@
+ #include "common/scene-helpers.h"
+ #include <assert.h>
+ #include <wlr/types/wlr_output.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/log.h>
+ #include "common/mem.h"
+ #include "magnifier.h"
+diff --git a/src/config/rcxml.c b/src/config/rcxml.c
+index ab0639d..e67e314 100644
+--- a/src/config/rcxml.c
++++ b/src/config/rcxml.c
+@@ -1201,6 +1201,38 @@ entry(xmlNode *node, char *nodename, char *content)
+ 		set_bool(content, &rc.shadows_enabled);
+ 	} else if (!strcasecmp(nodename, "dropShadowsOnTiled.theme")) {
+ 		set_bool(content, &rc.shadows_on_tiled);
++	} else if (!strcasecmp(nodename, "enabled.windowEffects")) {
++		set_bool(content, &rc.window_effects.enabled);
++	} else if (!strcasecmp(nodename, "activeOpacity.windowEffects")) {
++		set_float(content, &rc.window_effects.active_opacity);
++		rc.window_effects.active_opacity = MAX(0.0f,
++			MIN(1.0f, rc.window_effects.active_opacity));
++	} else if (!strcasecmp(nodename, "inactiveOpacity.windowEffects")) {
++		set_float(content, &rc.window_effects.inactive_opacity);
++		rc.window_effects.inactive_opacity = MAX(0.0f,
++			MIN(1.0f, rc.window_effects.inactive_opacity));
++	} else if (!strcasecmp(nodename, "enabled.blur.windowEffects")) {
++		set_bool(content, &rc.window_effects.blur_enabled);
++	} else if (!strcasecmp(nodename, "passes.blur.windowEffects")) {
++		rc.window_effects.blur_passes = MAX(0, MIN(10, atoi(content)));
++	} else if (!strcasecmp(nodename, "radius.blur.windowEffects")) {
++		rc.window_effects.blur_radius = MAX(0, MIN(10, atoi(content)));
++	} else if (!strcasecmp(nodename, "noise.blur.windowEffects")) {
++		set_float(content, &rc.window_effects.blur_noise);
++		rc.window_effects.blur_noise = MAX(0.0f,
++			MIN(1.0f, rc.window_effects.blur_noise));
++	} else if (!strcasecmp(nodename, "brightness.blur.windowEffects")) {
++		set_float(content, &rc.window_effects.blur_brightness);
++		rc.window_effects.blur_brightness = MAX(0.0f,
++			MIN(2.0f, rc.window_effects.blur_brightness));
++	} else if (!strcasecmp(nodename, "contrast.blur.windowEffects")) {
++		set_float(content, &rc.window_effects.blur_contrast);
++		rc.window_effects.blur_contrast = MAX(0.0f,
++			MIN(2.0f, rc.window_effects.blur_contrast));
++	} else if (!strcasecmp(nodename, "saturation.blur.windowEffects")) {
++		set_float(content, &rc.window_effects.blur_saturation);
++		rc.window_effects.blur_saturation = MAX(0.0f,
++			MIN(2.0f, rc.window_effects.blur_saturation));
+ 	} else if (!strcasecmp(nodename, "followMouse.focus")) {
+ 		set_bool(content, &rc.focus_follow_mouse);
+ 	} else if (!strcasecmp(nodename, "followMouseRequiresMovement.focus")) {
+@@ -1526,6 +1558,16 @@ rcxml_init(void)
+ 	rc.corner_radius = 8;
+ 	rc.shadows_enabled = false;
+ 	rc.shadows_on_tiled = false;
++	rc.window_effects.enabled = false;
++	rc.window_effects.active_opacity = 1.0f;
++	rc.window_effects.inactive_opacity = 1.0f;
++	rc.window_effects.blur_enabled = false;
++	rc.window_effects.blur_passes = 3;
++	rc.window_effects.blur_radius = 5;
++	rc.window_effects.blur_noise = 0.02f;
++	rc.window_effects.blur_brightness = 0.9f;
++	rc.window_effects.blur_contrast = 0.9f;
++	rc.window_effects.blur_saturation = 1.1f;
+ 
+ 	rc.gap = 0;
+ 	rc.adaptive_sync = LAB_ADAPTIVE_SYNC_DISABLED;
+diff --git a/src/cycle/cycle.c b/src/cycle/cycle.c
+index 0f183dd..e68c027 100644
+--- a/src/cycle/cycle.c
++++ b/src/cycle/cycle.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ #include "cycle.h"
+ #include <assert.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/box.h>
+ #include <wlr/util/log.h>
+ #include "common/lab-scene-rect.h"
+diff --git a/src/cycle/osd-classic.c b/src/cycle/osd-classic.c
+index 7e5abfb..302fcee 100644
+--- a/src/cycle/osd-classic.c
++++ b/src/cycle/osd-classic.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ #include <assert.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/box.h>
+ #include <wlr/util/log.h>
+ #include "common/buf.h"
+diff --git a/src/cycle/osd-scroll.c b/src/cycle/osd-scroll.c
+index e788a47..e2cfe06 100644
+--- a/src/cycle/osd-scroll.c
++++ b/src/cycle/osd-scroll.c
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ #include <assert.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "common/lab-scene-rect.h"
+ #include "common/scene-helpers.h"
+ #include "labwc.h"
+diff --git a/src/cycle/osd-thumbnail.c b/src/cycle/osd-thumbnail.c
+index defedf0..ad99517 100644
+--- a/src/cycle/osd-thumbnail.c
++++ b/src/cycle/osd-thumbnail.c
+@@ -4,7 +4,7 @@
+ #include <wlr/render/swapchain.h>
+ #include <wlr/types/wlr_buffer.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "config/rcxml.h"
+ #include "common/box.h"
+ #include "common/buf.h"
+@@ -73,6 +73,11 @@ render_node(struct wlr_render_pass *pass,
+ 		/* should be unreached */
+ 		wlr_log(WLR_ERROR, "ignoring rect");
+ 		break;
++	case WLR_SCENE_NODE_SHADOW:
++	case WLR_SCENE_NODE_OPTIMIZED_BLUR:
++	case WLR_SCENE_NODE_BLUR:
++		/* Effects are not part of the window-content thumbnail. */
++		break;
+ 	}
+ }
+ 
+diff --git a/src/debug.c b/src/debug.c
+index fef4d81..76b8370 100644
+--- a/src/debug.c
++++ b/src/debug.c
+@@ -2,7 +2,7 @@
+ #include "debug.h"
+ #include <stdlib.h>
+ #include <wlr/types/wlr_layer_shell_v1.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "common/lab-scene-rect.h"
+ #include "common/scene-helpers.h"
+ #include "common/string-helpers.h"
+@@ -42,6 +42,12 @@ get_node_type(struct wlr_scene_node *node)
+ 			return "surface";
+ 		}
+ 		return "buffer";
++	case WLR_SCENE_NODE_SHADOW:
++		return "shadow";
++	case WLR_SCENE_NODE_OPTIMIZED_BLUR:
++		return "optimized-blur";
++	case WLR_SCENE_NODE_BLUR:
++		return "blur";
+ 	}
+ 	return "error";
+ }
+diff --git a/src/desktop.c b/src/desktop.c
+index 57ef9e3..a73fad1 100644
+--- a/src/desktop.c
++++ b/src/desktop.c
+@@ -4,7 +4,7 @@
+ #include <wlr/types/wlr_cursor.h>
+ #include <wlr/types/wlr_layer_shell_v1.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_seat.h>
+ #include <wlr/types/wlr_subcompositor.h>
+ #include <wlr/types/wlr_xdg_shell.h>
+diff --git a/src/dnd.c b/src/dnd.c
+index 5d7d050..a0c21d7 100644
+--- a/src/dnd.c
++++ b/src/dnd.c
+@@ -2,7 +2,7 @@
+ #include "dnd.h"
+ #include <assert.h>
+ #include <wlr/types/wlr_data_device.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/log.h>
+ #include "common/scene-helpers.h"
+ #include "config/rcxml.h"
+diff --git a/src/edges.c b/src/edges.c
+index 4e5d7ca..fefa785 100644
+--- a/src/edges.c
++++ b/src/edges.c
+@@ -4,7 +4,7 @@
+ #include <limits.h>
+ #include <pixman.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/box.h>
+ #include "common/border.h"
+ #include "common/box.h"
+diff --git a/src/input/cursor.c b/src/input/cursor.c
+index e8ac7d9..fb69281 100644
+--- a/src/input/cursor.c
++++ b/src/input/cursor.c
+@@ -11,7 +11,7 @@
+ #include <wlr/types/wlr_pointer_constraints_v1.h>
+ #include <wlr/types/wlr_primary_selection.h>
+ #include <wlr/types/wlr_relative_pointer_v1.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_subcompositor.h>
+ #include <wlr/types/wlr_xcursor_manager.h>
+ #include <wlr/types/wlr_xdg_shell.h>
+diff --git a/src/input/ime.c b/src/input/ime.c
+index 1758d1c..8b6646c 100644
+--- a/src/input/ime.c
++++ b/src/input/ime.c
+@@ -6,7 +6,7 @@
+ #include <wlr/types/wlr_input_method_v2.h>
+ #include <wlr/types/wlr_layer_shell_v1.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_seat.h>
+ #include <wlr/types/wlr_text_input_v3.h>
+ #include <wlr/types/wlr_virtual_keyboard_v1.h>
+diff --git a/src/input/key-state.c b/src/input/key-state.c
+index 6d08989..bbe002a 100644
+--- a/src/input/key-state.c
++++ b/src/input/key-state.c
+@@ -5,7 +5,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <wlr/types/wlr_keyboard.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <xkbcommon/xkbcommon.h>
+ #include "config/rcxml.h"
+ #include "common/buf.h"
+diff --git a/src/input/tablet.c b/src/input/tablet.c
+index 82d5e80..68a3258 100644
+--- a/src/input/tablet.c
++++ b/src/input/tablet.c
+@@ -7,7 +7,7 @@
+ #include <wlr/types/wlr_tablet_tool.h>
+ #include <wlr/types/wlr_tablet_v2.h>
+ #include <wlr/util/log.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/log.h>
+ #include "common/macros.h"
+ #include "common/mem.h"
+diff --git a/src/input/touch.c b/src/input/touch.c
+index 42fab35..6491d30 100644
+--- a/src/input/touch.c
++++ b/src/input/touch.c
+@@ -2,7 +2,7 @@
+ #include "input/touch.h"
+ #include <wayland-util.h>
+ #include <wlr/types/wlr_cursor.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_seat.h>
+ #include <wlr/types/wlr_touch.h>
+ #include <linux/input-event-codes.h>
+diff --git a/src/layers.c b/src/layers.c
+index eaa93f2..4a2e757 100644
+--- a/src/layers.c
++++ b/src/layers.c
+@@ -14,7 +14,7 @@
+ #include <wlr/types/wlr_cursor.h>
+ #include <wlr/types/wlr_fractional_scale_v1.h>
+ #include <wlr/types/wlr_layer_shell_v1.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_xdg_shell.h>
+ #include <wlr/util/log.h>
+ #include "common/macros.h"
+diff --git a/src/magnifier.c b/src/magnifier.c
+index 43a7174..3652a95 100644
+--- a/src/magnifier.c
++++ b/src/magnifier.c
+@@ -6,7 +6,7 @@
+ #include <wlr/render/swapchain.h>
+ #include <wlr/types/wlr_cursor.h>
+ #include <wlr/types/wlr_output.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/transform.h>
+ #include "common/box.h"
+ #include "config/rcxml.h"
+diff --git a/src/main.c b/src/main.c
+index 081bd62..e0a4a32 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -70,7 +70,7 @@ static void
+ print_version(void)
+ {
+ 	#define FEATURE_ENABLED(feature) (HAVE_##feature ? "+" : "-")
+-	printf("labwc %s (%sxwayland %snls %srsvg %slibsfdo) wlroots-%d.%d.%d\n",
++	printf("labwc %s (%sxwayland %snls %srsvg %slibsfdo) wlroots-%d.%d.%d scenefx-%s\n",
+ 		LABWC_VERSION,
+ 		FEATURE_ENABLED(XWAYLAND),
+ 		FEATURE_ENABLED(NLS),
+@@ -78,7 +78,8 @@ print_version(void)
+ 		FEATURE_ENABLED(LIBSFDO),
+ 		wlr_version_get_major(),
+ 		wlr_version_get_minor(),
+-		wlr_version_get_micro()
++		wlr_version_get_micro(),
++		SCENEFX_VERSION
+ 	);
+ 	#undef FEATURE_ENABLED
+ }
+diff --git a/src/menu/menu.c b/src/menu/menu.c
+index c0e93c5..ced7fb3 100644
+--- a/src/menu/menu.c
++++ b/src/menu/menu.c
+@@ -10,7 +10,7 @@
+ #include <string.h>
+ #include <strings.h>
+ #include <unistd.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_xdg_shell.h>
+ #include <wlr/util/log.h>
+ #include "action.h"
+diff --git a/src/node.c b/src/node.c
+index 19b4b5a..c7ffd40 100644
+--- a/src/node.c
++++ b/src/node.c
+@@ -2,7 +2,7 @@
+ #include "node.h"
+ #include <assert.h>
+ #include <stdlib.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "common/mem.h"
+ #include "ssd.h"
+ 
+diff --git a/src/output.c b/src/output.c
+index 2eab8ec..001ed04 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -22,7 +22,7 @@
+ #include <wlr/types/wlr_output_power_management_v1.h>
+ #include <wlr/types/wlr_xcursor_manager.h>
+ #include <wlr/types/wlr_xdg_output_v1.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/log.h>
+ #include "common/macros.h"
+ #include "common/mem.h"
+@@ -261,6 +261,7 @@ handle_output_frame(struct wl_listener *listener, void *data)
+ 	struct wlr_scene_output *scene_output = output->scene_output;
+ 	struct wlr_output_state *pending = &output->pending;
+ 
++	view_effects_update_all();
+ 	pending->tearing_page_flip = output_get_tearing_allowance(output);
+ 
+ 	lab_wlr_scene_output_commit(scene_output, pending);
+diff --git a/src/overlay.c b/src/overlay.c
+index 817bb3f..63d28f8 100644
+--- a/src/overlay.c
++++ b/src/overlay.c
+@@ -3,7 +3,7 @@
+ #include <assert.h>
+ #include <wlr/types/wlr_cursor.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "common/lab-scene-rect.h"
+ #include "config/rcxml.h"
+ #include "labwc.h"
+diff --git a/src/resize-outlines.c b/src/resize-outlines.c
+index 113f128..eba7f68 100644
+--- a/src/resize-outlines.c
++++ b/src/resize-outlines.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ 
+ #include "resize-outlines.h"
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "common/border.h"
+ #include "common/lab-scene-rect.h"
+ #include "config/rcxml.h"
+diff --git a/src/scaled-buffer/scaled-buffer.c b/src/scaled-buffer/scaled-buffer.c
+index 95ec896..119b212 100644
+--- a/src/scaled-buffer/scaled-buffer.c
++++ b/src/scaled-buffer/scaled-buffer.c
+@@ -6,7 +6,7 @@
+ #include <wayland-server-core.h>
+ #include <wlr/types/wlr_buffer.h>
+ #include <wlr/types/wlr_output.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/log.h>
+ #include "buffer.h"
+ #include "common/list.h"
+diff --git a/src/server.c b/src/server.c
+index d0c8c04..e93413c 100644
+--- a/src/server.c
++++ b/src/server.c
+@@ -2,6 +2,7 @@
+ #define _POSIX_C_SOURCE 200809L
+ #include "config.h"
+ #include <assert.h>
++#include <scenefx/render/fx_renderer/fx_renderer.h>
+ #include <signal.h>
+ #include <string.h>
+ #include <sys/wait.h>
+@@ -30,7 +31,7 @@
+ #include <wlr/types/wlr_presentation_time.h>
+ #include <wlr/types/wlr_primary_selection_v1.h>
+ #include <wlr/types/wlr_relative_pointer_v1.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_screencopy_v1.h>
+ #include <wlr/types/wlr_security_context_v1.h>
+ #include <wlr/types/wlr_single_pixel_buffer_v1.h>
+@@ -111,6 +112,7 @@ reload_config_and_theme(void)
+ 	wl_list_for_each(view, &server.views, link) {
+ 		view_reload_ssd(view);
+ 	}
++	view_effects_reconfigure();
+ 
+ 	cycle_finish(/*switch_focus*/ false);
+ 	menu_reconfigure();
+@@ -373,7 +375,7 @@ handle_renderer_lost(struct wl_listener *listener, void *data)
+ {
+ 	wlr_log(WLR_INFO, "Re-creating renderer after GPU reset");
+ 
+-	struct wlr_renderer *renderer = wlr_renderer_autocreate(server.backend);
++	struct wlr_renderer *renderer = fx_renderer_create(server.backend);
+ 	if (!renderer) {
+ 		wlr_log(WLR_ERROR, "Unable to create renderer");
+ 		return;
+@@ -527,7 +529,7 @@ server_init(void)
+ 	 * The renderer is responsible for defining the various pixel formats it
+ 	 * supports for shared memory, this configures that for clients.
+ 	 */
+-	server.renderer = wlr_renderer_autocreate(server.backend);
++	server.renderer = fx_renderer_create(server.backend);
+ 	if (!server.renderer) {
+ 		wlr_log(WLR_ERROR, "unable to create renderer");
+ 		exit(EXIT_FAILURE);
+@@ -580,6 +582,7 @@ server_init(void)
+ 
+ 	server.scene = wlr_scene_create();
+ 	die_if_null(server.scene);
++	view_effects_reconfigure();
+ 
+ 	server.direct_scanout_enabled = server.scene->WLR_PRIVATE.direct_scanout;
+ 
+diff --git a/src/session-lock.c b/src/session-lock.c
+index 4e5eb8a..21d3e3d 100644
+--- a/src/session-lock.c
++++ b/src/session-lock.c
+@@ -3,7 +3,7 @@
+ #include "session-lock.h"
+ #include <assert.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_session_lock_v1.h>
+ #include "common/mem.h"
+ #include "common/scene-helpers.h"
+diff --git a/src/ssd/resize-indicator.c b/src/ssd/resize-indicator.c
+index fa1166a..b904d9a 100644
+--- a/src/ssd/resize-indicator.c
++++ b/src/ssd/resize-indicator.c
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ #include <assert.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/util/box.h>
+ #include <wlr/util/log.h>
+ #include "common/scene-helpers.h"
+diff --git a/src/ssd/ssd-border.c b/src/ssd/ssd-border.c
+index c2c99f8..13d47f9 100644
+--- a/src/ssd/ssd-border.c
++++ b/src/ssd/ssd-border.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ 
+ #include <assert.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "common/macros.h"
+ #include "common/scene-helpers.h"
+ #include "config/rcxml.h"
+diff --git a/src/ssd/ssd-button.c b/src/ssd/ssd-button.c
+index 7342dfa..9f9c7ea 100644
+--- a/src/ssd/ssd-button.c
++++ b/src/ssd/ssd-button.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ 
+ #include <assert.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "config/rcxml.h"
+ #include "common/list.h"
+ #include "common/mem.h"
+diff --git a/src/ssd/ssd-extents.c b/src/ssd/ssd-extents.c
+index 3840b10..797c803 100644
+--- a/src/ssd/ssd-extents.c
++++ b/src/ssd/ssd-extents.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ 
+ #include <pixman.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "common/scene-helpers.h"
+ #include "config/rcxml.h"
+ #include "labwc.h"
+diff --git a/src/ssd/ssd-shadow.c b/src/ssd/ssd-shadow.c
+index 9a45612..bda6204 100644
+--- a/src/ssd/ssd-shadow.c
++++ b/src/ssd/ssd-shadow.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ 
+ #include <assert.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "buffer.h"
+ #include "common/scene-helpers.h"
+ #include "config/rcxml.h"
+diff --git a/src/ssd/ssd-titlebar.c b/src/ssd/ssd-titlebar.c
+index d1a0881..aa9acc9 100644
+--- a/src/ssd/ssd-titlebar.c
++++ b/src/ssd/ssd-titlebar.c
+@@ -4,7 +4,7 @@
+ #include <assert.h>
+ #include <string.h>
+ #include <wlr/render/pixman.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "buffer.h"
+ #include "common/mem.h"
+ #include "common/scene-helpers.h"
+diff --git a/src/ssd/ssd.c b/src/ssd/ssd.c
+index e2ab637..4a0d5e6 100644
+--- a/src/ssd/ssd.c
++++ b/src/ssd/ssd.c
+@@ -10,7 +10,7 @@
+ #include <assert.h>
+ #include <strings.h>
+ #include <wlr/types/wlr_cursor.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "common/mem.h"
+ #include "common/scene-helpers.h"
+ #include "config/rcxml.h"
+diff --git a/src/view.c b/src/view.c
+index 21005f2..8e21642 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -1,11 +1,12 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ #include "view.h"
+ #include <assert.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <strings.h>
++#include <wlr/types/wlr_alpha_modifier_v1.h>
+ #include <wlr/types/wlr_cursor.h>
+ #include <wlr/types/wlr_keyboard_group.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
+ #include <wlr/types/wlr_security_context_v1.h>
+ #include <wlr/types/wlr_xdg_shell.h>
+ #include "action.h"
+@@ -459,10 +460,98 @@ view_discover_output(struct view *view, struct wlr_box *geometry)
+ 	return false;
+ }
+ 
++static void
++set_window_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
++{
++	(void)sx;
++	(void)sy;
++	float opacity = *(float *)data;
++	struct wlr_scene_surface *surface =
++		wlr_scene_surface_try_from_buffer(buffer);
++	if (surface) {
++		const struct wlr_alpha_modifier_surface_v1_state *alpha =
++			wlr_alpha_modifier_v1_get_surface_state(surface->surface);
++		if (alpha) {
++			opacity *= alpha->multiplier;
++		}
++	}
++	wlr_scene_buffer_set_opacity(buffer, opacity);
++}
++
++void
++view_effects_create(struct view *view)
++{
++	assert(view);
++	assert(view->scene_tree);
++	assert(!view->effects.blur);
++
++	view->effects.blur = wlr_scene_blur_create(view->scene_tree, 0, 0);
++	die_if_null(view->effects.blur);
++	wlr_scene_node_lower_to_bottom(&view->effects.blur->node);
++	view_effects_update(view);
++}
++
++void
++view_effects_update(struct view *view)
++{
++	assert(view);
++
++	bool enabled = rc.window_effects.enabled && !view->fullscreen;
++	float opacity = 1.0f;
++	if (enabled) {
++		opacity = view->effects.activated
++			? rc.window_effects.active_opacity
++			: rc.window_effects.inactive_opacity;
++	}
++	if (view->content_tree) {
++		wlr_scene_node_for_each_buffer(&view->content_tree->node,
++			set_window_opacity, &opacity);
++	}
++
++	if (!view->effects.blur) {
++		return;
++	}
++	int height = view_effective_height(view, /* use_pending */ false);
++	bool blur_enabled = enabled && rc.window_effects.blur_enabled
++		&& opacity < 1.0f && view->current.width > 0 && height > 0;
++	wlr_scene_node_set_enabled(&view->effects.blur->node, blur_enabled);
++	if (blur_enabled) {
++		wlr_scene_blur_set_size(view->effects.blur,
++			view->current.width, height);
++	}
++}
++
++void
++view_effects_update_all(void)
++{
++	struct view *view;
++	wl_list_for_each(view, &server.views, link) {
++		view_effects_update(view);
++	}
++}
++
++void
++view_effects_reconfigure(void)
++{
++	if (!server.scene) {
++		return;
++	}
++	wlr_scene_set_blur_data(server.scene,
++		rc.window_effects.blur_passes,
++		rc.window_effects.blur_radius,
++		rc.window_effects.blur_noise,
++		rc.window_effects.blur_brightness,
++		rc.window_effects.blur_contrast,
++		rc.window_effects.blur_saturation);
++	view_effects_update_all();
++}
++
+ void
+ view_set_activated(struct view *view, bool activated)
+ {
+ 	assert(view);
++	view->effects.activated = activated;
++	view_effects_update(view);
+ 	ssd_set_active(view->ssd, activated);
+ 	if (view->impl->set_activated) {
+ 		view->impl->set_activated(view, activated);
+@@ -563,6 +652,7 @@ view_moved(struct view *view)
+ 	}
+ 	view_update_outputs(view);
+ 	ssd_update_geometry(view->ssd);
++	view_effects_update(view);
+ 	cursor_update_focus();
+ 	if (rc.resize_indicator && server.grabbed_view == view) {
+ 		resize_indicator_update(view);
+@@ -1676,6 +1766,7 @@ set_fullscreen(struct view *view, bool fullscreen)
+ 	}
+ 
+ 	view->fullscreen = fullscreen;
++	view_effects_update(view);
+ 	wl_signal_emit_mutable(&view->events.fullscreened, NULL);
+ 
+ 	/* Re-show decorations when no longer fullscreen */
+@@ -2439,6 +2530,7 @@ view_set_shade(struct view *view, bool shaded)
+ 		wlr_scene_node_set_enabled(&view->content_tree->node,
+ 			!view->shaded);
+ 	}
++	view_effects_update(view);
+ }
+ 
+ void
+diff --git a/src/workspaces.c b/src/workspaces.c
+index a1ed911..47e8c94 100644
+--- a/src/workspaces.c
++++ b/src/workspaces.c
+@@ -10,7 +10,7 @@
+ #include <strings.h>
+ #include <wlr/types/wlr_ext_workspace_v1.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include "buffer.h"
+ #include "common/font.h"
+ #include "common/graphic-helpers.h"
+diff --git a/src/xdg-popup.c b/src/xdg-popup.c
+index 7ca9ab0..feee37b 100644
+--- a/src/xdg-popup.c
++++ b/src/xdg-popup.c
+@@ -7,7 +7,7 @@
+  *	- keeping non-layer-shell xdg-popups outside the layers.c code
+  */
+ 
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_xdg_shell.h>
+ #include "common/macros.h"
+ #include "common/mem.h"
+diff --git a/src/xdg.c b/src/xdg.c
+index ccba0de..4571f02 100644
+--- a/src/xdg.c
++++ b/src/xdg.c
+@@ -3,7 +3,7 @@
+ #include <assert.h>
+ #include <wlr/types/wlr_cursor.h>
+ #include <wlr/types/wlr_fractional_scale_v1.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_xdg_activation_v1.h>
+ #include <wlr/types/wlr_xdg_dialog_v1.h>
+ #include <wlr/types/wlr_xdg_shell.h>
+@@ -1041,6 +1041,7 @@ handle_new_xdg_toplevel(struct wl_listener *listener, void *data)
+ 	view->scene_tree = lab_wlr_scene_tree_create(
+ 		view->workspace->view_trees[VIEW_LAYER_NORMAL]);
+ 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
++	view_effects_create(view);
+ 
+ 	struct wlr_scene_tree *tree = wlr_scene_xdg_surface_create(
+ 		view->scene_tree, xdg_surface);
+diff --git a/src/xwayland-unmanaged.c b/src/xwayland-unmanaged.c
+index 89d40e8..917f6db 100644
+--- a/src/xwayland-unmanaged.c
++++ b/src/xwayland-unmanaged.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ #include <assert.h>
+ #include <wlr/types/wlr_compositor.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_seat.h>
+ #include <wlr/xwayland.h>
+ #include "common/list.h"
+diff --git a/src/xwayland.c b/src/xwayland.c
+index 5838d41..4742b0b 100644
+--- a/src/xwayland.c
++++ b/src/xwayland.c
+@@ -5,7 +5,7 @@
+ #include <stdlib.h>
+ #include <wlr/types/wlr_compositor.h>
+ #include <wlr/types/wlr_output_layout.h>
+-#include <wlr/types/wlr_scene.h>
++#include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_seat.h>
+ #include <wlr/types/wlr_xcursor_manager.h>
+ #include <wlr/xwayland.h>
+@@ -1007,6 +1007,7 @@ xwayland_view_create(struct wlr_xwayland_surface *xsurface, bool mapped)
+ 	view->scene_tree = lab_wlr_scene_tree_create(
+ 		view->workspace->view_trees[VIEW_LAYER_NORMAL]);
+ 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
++	view_effects_create(view);
+ 	node_descriptor_create(&view->scene_tree->node,
+ 		LAB_NODE_VIEW, view, /*data*/ NULL);
+ 
