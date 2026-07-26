@@ -46,6 +46,12 @@ in
           saturation = 1.1;
         };
       };
+      windowSwitcher = {
+        "@preview" = "no";
+        "@outlines" = "no";
+        "@unshade" = "no";
+        osd."@show" = "no";
+      };
       windowRules.windowRule = {
         "@identifier" = "*";
         "@serverDecoration" = "yes";

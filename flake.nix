@@ -113,6 +113,7 @@
           '';
 
           xdpw-foot-chooser = pkgs.callPackage ./tests/xdpw-foot-chooser.nix { };
+          labwc-window-switcher = pkgs.callPackage ./tests/labwc-window-switcher.nix { };
         };
 
       nixosConfigurations.nixos = nixpkgs.lib.nixosSystem {

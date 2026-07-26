@@ -8,6 +8,7 @@
 let
   action = name: attrs: { "@name" = name; } // attrs;
   execute = command: action "Execute" { "@command" = command; };
+  windowSwitcher = pkgs.callPackage ../../packages/labwc-window-switcher.nix { };
   goToDesktop = desktop: action "GoToDesktop" { "@to" = toString desktop; };
   sendToDesktop =
     desktop:
@@ -65,12 +66,20 @@ in
         action = action "ToggleMaximize" { };
       }
       {
+        "@key" = "A-Tab";
+        action = execute (lib.getExe windowSwitcher);
+      }
+      {
+        "@key" = "A-S-Tab";
+        action = execute (lib.getExe windowSwitcher);
+      }
+      {
         "@key" = "W-Tab";
-        action = action "NextWindow" { };
+        action = execute (lib.getExe windowSwitcher);
       }
       {
         "@key" = "W-S-Tab";
-        action = action "PreviousWindow" { };
+        action = execute (lib.getExe windowSwitcher);
       }
       {
         "@key" = "W-d";
