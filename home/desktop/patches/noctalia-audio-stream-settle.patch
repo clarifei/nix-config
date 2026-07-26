@@ -1,0 +1,88 @@
+diff --git a/src/pipewire/pipewire_service.h b/src/pipewire/pipewire_service.h
+--- a/src/pipewire/pipewire_service.h
++++ b/src/pipewire/pipewire_service.h
+@@ -1,5 +1,6 @@
+ #pragma once
+
++#include "core/timer_manager.h"
+ #include "pipewire/audio_glyphs.h"
+
+ #include <chrono>
+@@ -170,6 +171,7 @@ public:
+     std::uint32_t routeDirection = 0;
+     std::vector<DeviceRouteData> routes;
+     float lastWrittenVolume = -1.0f;
++    std::chrono::steady_clock::time_point discoveredAt = std::chrono::steady_clock::now();
+     std::chrono::steady_clock::time_point volumeWriteGuardUntil;
+     struct pw_node* proxy = nullptr;
+     spa_hook* listener = nullptr;
+@@ -263,6 +265,7 @@ private:
+   std::vector<std::function<void()>> m_metadataCleanups;
+   std::string m_defaultSinkName;
+   std::string m_defaultSourceName;
++  Timer m_programOutputSettleTimer;
+   AudioState m_state;
+   PrivacyState m_privacyState;
+   ChangeCallback m_changeCallback;
+diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.cpp
+--- a/src/pipewire/pipewire_service.cpp
++++ b/src/pipewire/pipewire_service.cpp
+@@ -48,6 +48,10 @@ namespace {
+   // Write guard: keep optimistic local volume briefly and ignore echoes within epsilon.
+   constexpr auto kVolumeWriteGuardDuration = std::chrono::milliseconds(400);
+   constexpr auto kVolumeWriteGuardEpsilon = 0.02f;
++
++  // Electron/WebRTC briefly creates replacement playback nodes while negotiating a call. Keep
++  // those nodes out of Application Volumes until they have survived one stable lifecycle window.
++  constexpr auto kProgramOutputSettleDelay = std::chrono::milliseconds(1000);
+
+   // Registry events.
+   void onRegistryGlobal(
+@@ -763,6 +767,8 @@ PipeWireService::PipeWireService() {
+ }
+
+ PipeWireService::~PipeWireService() {
++  m_programOutputSettleTimer.stop();
++
+   // Destroy node proxies and their listeners
+   for (auto& [id, nd] : m_nodes) {
+     if (nd->listener != nullptr) {
+@@ -1546,6 +1552,8 @@ void PipeWireService::refreshNodeIdentity(NodeData& nd) {
+ void PipeWireService::rebuildState() {
+   AudioState next;
+   PrivacyState nextPrivacy;
++  const auto now = std::chrono::steady_clock::now();
++  std::optional<std::chrono::milliseconds> nextProgramOutputDelay;
+
+   auto findNode = [this](std::uint32_t nodeId) -> const NodeData* {
+     const auto it = m_nodes.find(nodeId);
+@@ -1632,7 +1640,15 @@ void PipeWireService::rebuildState() {
+       }
+       next.sources.push_back(std::move(node));
+     } else if (isProgramOutputNode(*nd)) {
+-      next.programOutputs.push_back(std::move(node));
++      const auto readyAt = nd->discoveredAt + kProgramOutputSettleDelay;
++      if (now >= readyAt) {
++        next.programOutputs.push_back(std::move(node));
++      } else {
++        const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(readyAt - now);
++        if (!nextProgramOutputDelay.has_value() || remaining < *nextProgramOutputDelay) {
++          nextProgramOutputDelay = remaining;
++        }
++      }
+     }
+   }
+
+@@ -1662,6 +1678,12 @@ void PipeWireService::rebuildState() {
+     return std::tie(capture.kind, capture.appName, capture.nodeId);
+   });
+
++  if (nextProgramOutputDelay.has_value()) {
++    m_programOutputSettleTimer.start(*nextProgramOutputDelay, [this]() { rebuildState(); });
++  } else {
++    m_programOutputSettleTimer.stop();
++  }
++
+   if (next == m_state && nextPrivacy == m_privacyState) {
+     return;
+   }

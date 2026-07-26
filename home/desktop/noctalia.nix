@@ -11,7 +11,10 @@ let
   osc = code: value: "${esc}]${code};${value}${bel}";
 
   noctaliaPatched = noctalia.packages.${pkgs.stdenv.hostPlatform.system}.default.overrideAttrs (old: {
-    patches = (old.patches or [ ]) ++ [ ./patches/noctalia-smart-autohide-labwc.patch ];
+    patches = (old.patches or [ ]) ++ [
+      ./patches/noctalia-smart-autohide-labwc.patch
+      ./patches/noctalia-audio-stream-settle.patch
+    ];
   });
 
   terminalSequences = builtins.concatStringsSep "" [
