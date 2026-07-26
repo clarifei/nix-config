@@ -1,0 +1,214 @@
+diff --git a/src/filechooser/filechooser.c b/src/filechooser/filechooser.c
+index cb614df..e45ae16 100644
+--- a/src/filechooser/filechooser.c
++++ b/src/filechooser/filechooser.c
+@@ -38,8 +38,119 @@ static const char instructions[] =
+ static const char object_path[] = "/org/freedesktop/portal/desktop";
+ static const char interface_name[] = "org.freedesktop.impl.portal.FileChooser";
+
++static void get_filters_path(char *path, size_t size)
++{
++    snprintf(path, size, "%s-%u.filters", PATH_PORTAL_BASE, getuid());
++}
++
++static int write_filter_record(FILE *fp, const char *value)
++{
++    size_t size = strlen(value) + 1;
++    return fwrite(value, 1, size, fp) == size ? 0 : -EIO;
++}
++
++static int serialize_filters(sd_bus_message *msg, const char *filename)
++{
++    int fd = open(filename,
++                  O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
++    if (fd < 0) {
++        return -errno;
++    }
++
++    FILE *fp = fdopen(fd, "wb");
++    if (fp == NULL) {
++        int ret = -errno;
++        close(fd);
++        return ret;
++    }
++
++    int ret = sd_bus_message_enter_container(msg, 'v', "a(sa(us))");
++    if (ret < 0) {
++        goto fail;
++    }
++
++    ret = sd_bus_message_enter_container(msg, 'a', "(sa(us))");
++    if (ret < 0) {
++        goto fail;
++    }
++
++    while ((ret = sd_bus_message_enter_container(msg, 'r', "sa(us)")) > 0) {
++        const char *name = NULL;
++        ret = sd_bus_message_read(msg, "s", &name);
++        if (ret < 0 || (ret = write_filter_record(fp, "filter")) < 0 ||
++            (ret = write_filter_record(fp, name)) < 0) {
++            goto fail;
++        }
++
++        ret = sd_bus_message_enter_container(msg, 'a', "(us)");
++        if (ret < 0) {
++            goto fail;
++        }
++
++        while ((ret = sd_bus_message_enter_container(msg, 'r', "us")) > 0) {
++            unsigned int kind = 0;
++            const char *pattern = NULL;
++            ret = sd_bus_message_read(msg, "us", &kind, &pattern);
++            if (ret < 0) {
++                goto fail;
++            }
++
++            if (kind <= 1) {
++                char kind_string[2] = {(char)('0' + kind), '\0'};
++                if ((ret = write_filter_record(fp, "rule")) < 0 ||
++                    (ret = write_filter_record(fp, kind_string)) < 0 ||
++                    (ret = write_filter_record(fp, pattern)) < 0) {
++                    goto fail;
++                }
++            }
++
++            ret = sd_bus_message_exit_container(msg);
++            if (ret < 0) {
++                goto fail;
++            }
++        }
++        if (ret < 0) {
++            goto fail;
++        }
++
++        ret = sd_bus_message_exit_container(msg);
++        if (ret < 0 || (ret = write_filter_record(fp, "end-filter")) < 0) {
++            goto fail;
++        }
++
++        ret = sd_bus_message_exit_container(msg);
++        if (ret < 0) {
++            goto fail;
++        }
++    }
++    if (ret < 0) {
++        goto fail;
++    }
++
++    ret = sd_bus_message_exit_container(msg);
++    if (ret < 0) {
++        goto fail;
++    }
++    ret = sd_bus_message_exit_container(msg);
++    if (ret < 0 || (ret = write_filter_record(fp, "end")) < 0) {
++        goto fail;
++    }
++
++    if (fclose(fp) != 0) {
++        remove(filename);
++        return -EIO;
++    }
++    return 0;
++
++fail:
++    fclose(fp);
++    remove(filename);
++    return ret;
++}
++
+ static int exec_filechooser(void *data, bool writing, bool multiple,
+-                            bool directory, char *path, char ***selected_files,
++                            bool directory, char *path, const char *filters_path,
++                            char ***selected_files,
+                             size_t *num_selected_files)
+ {
+     struct xdptf_state *state = data;
+@@ -59,12 +170,14 @@ static int exec_filechooser(void *data, bool writing, bool multiple,
+     char *filename = malloc(filename_size);
+     snprintf(filename, filename_size, "%s-%u.portal", PATH_PORTAL_BASE, uid);
+
+-    size_t str_size = 1 + snprintf(NULL, 0, "%s %d %d %d \'%s\' \'%s\' %d",
+-                                   cmd_script, multiple, directory, writing,
+-                                   path, filename, get_logger_level());
++    size_t str_size =
++        1 + snprintf(NULL, 0, "%s %d %d %d \'%s\' \'%s\' %d \'%s\'",
++                     cmd_script, multiple, directory, writing, path, filename,
++                     get_logger_level(), filters_path);
+     char *cmd = malloc(str_size);
+-    snprintf(cmd, str_size, "%s %d %d %d \'%s\' \'%s\' %d", cmd_script,
+-             multiple, directory, writing, path, filename, get_logger_level());
++    snprintf(cmd, str_size, "%s %d %d %d \'%s\' \'%s\' %d \'%s\'", cmd_script,
++             multiple, directory, writing, path, filename, get_logger_level(),
++             filters_path);
+
+     struct environment *env = state->config->env;
+
+@@ -437,6 +550,9 @@ static int method_open_file(sd_bus_message *msg, void *data,
+     char *key;
+     int inner_ret = 0;
+     int multiple = 0, directory = 0;
++    char filters_path[128];
++    get_filters_path(filters_path, sizeof(filters_path));
++    remove(filters_path);
+     char *current_folder = NULL;
+     while ((ret = sd_bus_message_enter_container(msg, 'e', "sv")) > 0) {
+         inner_ret = sd_bus_message_read(msg, "s", &key);
+@@ -455,6 +571,11 @@ static int method_open_file(sd_bus_message *msg, void *data,
+         } else if (strcmp(key, "directory") == 0) {
+             sd_bus_message_read(msg, "v", "b", &directory);
+             logprint(DEBUG, "dbus: option directory: %d", directory);
++        } else if (strcmp(key, "filters") == 0) {
++            inner_ret = serialize_filters(msg, filters_path);
++            if (inner_ret < 0) {
++                return inner_ret;
++            }
+         } else if (strcmp(key, "current_folder") == 0) {
+             const void *p = NULL;
+             size_t sz = 0;
+@@ -505,9 +626,10 @@ static int method_open_file(sd_bus_message *msg, void *data,
+                        &state->config->default_dir, &current_folder);
+
+     char *escaped_path = escape_path(current_folder);
+-    ret = exec_filechooser(data, false, multiple, directory, escaped_path,
+-                           &selected_files, &num_selected_files);
++    ret = exec_filechooser(data, false, multiple, directory, escaped_path,
++                           filters_path, &selected_files, &num_selected_files);
+
++    remove(filters_path);
+     free(current_folder);
+     if (ret) {
+         goto cleanup;
+@@ -611,6 +733,9 @@ static int method_save_file(sd_bus_message *msg, void *data,
+     char *key;
+     int inner_ret = 0;
+     char *current_name = NULL;
++    char filters_path[128];
++    get_filters_path(filters_path, sizeof(filters_path));
++    remove(filters_path);
+     char *current_folder = NULL;
+     while ((ret = sd_bus_message_enter_container(msg, 'e', "sv")) > 0) {
+         inner_ret = sd_bus_message_read(msg, "s", &key);
+@@ -622,6 +747,11 @@ static int method_save_file(sd_bus_message *msg, void *data,
+         if (strcmp(key, "current_name") == 0) {
+             sd_bus_message_read(msg, "v", "s", &current_name);
+             logprint(DEBUG, "dbus: option current_name: %s", current_name);
++        } else if (strcmp(key, "filters") == 0) {
++            inner_ret = serialize_filters(msg, filters_path);
++            if (inner_ret < 0) {
++                return inner_ret;
++            }
+         } else if (strcmp(key, "current_folder") == 0) {
+             const void *p = NULL;
+             size_t sz = 0;
+@@ -724,9 +854,10 @@ static int method_save_file(sd_bus_message *msg, void *data,
+
+     char *escaped_path = escape_path(path);
+
+-    ret = exec_filechooser(data, true, false, false, escaped_path,
+-                           &selected_files, &num_selected_files);
++    ret = exec_filechooser(data, true, false, false, escaped_path, filters_path,
++                           &selected_files, &num_selected_files);
+
++    remove(filters_path);
+     logprint(INFO, "filechooser: (SaveFile) Number of selected files: %d",
+              num_selected_files);

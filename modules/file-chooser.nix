@@ -1,6 +1,14 @@
 { pkgs, ... }:
 
 {
+  nixpkgs.overlays = [
+    (_final: prev: {
+      xdg-desktop-portal-termfilechooser = prev.xdg-desktop-portal-termfilechooser.overrideAttrs (oldAttrs: {
+        patches = (oldAttrs.patches or [ ]) ++ [ ./patches/termfilechooser-filters.patch ];
+      });
+    })
+  ];
+
   xdg.portal = {
     enable = true;
     extraPortals = [ pkgs.xdg-desktop-portal-termfilechooser ];
