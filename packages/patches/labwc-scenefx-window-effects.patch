@@ -8,7 +8,7 @@ diff --git a/include/config/rcxml.h b/include/config/rcxml.h
 index 9c2183a..792a649 100644
 --- a/include/config/rcxml.h
 +++ b/include/config/rcxml.h
-@@ -115,6 +115,18 @@ struct rcxml {
+@@ -115,6 +115,17 @@ struct rcxml {
  	bool ssd_keep_border;
  	bool shadows_enabled;
  	bool shadows_on_tiled;
@@ -19,7 +19,6 @@ index 9c2183a..792a649 100644
 +		bool blur_enabled;
 +		int blur_passes;
 +		int blur_radius;
-+		float blur_noise;
 +		float blur_brightness;
 +		float blur_contrast;
 +		float blur_saturation;
@@ -83,7 +82,7 @@ diff --git a/src/config/rcxml.c b/src/config/rcxml.c
 index ab0639d..e67e314 100644
 --- a/src/config/rcxml.c
 +++ b/src/config/rcxml.c
-@@ -1201,6 +1201,38 @@ entry(xmlNode *node, char *nodename, char *content)
+@@ -1201,6 +1201,34 @@ entry(xmlNode *node, char *nodename, char *content)
  		set_bool(content, &rc.shadows_enabled);
  	} else if (!strcasecmp(nodename, "dropShadowsOnTiled.theme")) {
  		set_bool(content, &rc.shadows_on_tiled);
@@ -103,10 +102,6 @@ index ab0639d..e67e314 100644
 +		rc.window_effects.blur_passes = MAX(0, MIN(10, atoi(content)));
 +	} else if (!strcasecmp(nodename, "radius.blur.windowEffects")) {
 +		rc.window_effects.blur_radius = MAX(0, MIN(10, atoi(content)));
-+	} else if (!strcasecmp(nodename, "noise.blur.windowEffects")) {
-+		set_float(content, &rc.window_effects.blur_noise);
-+		rc.window_effects.blur_noise = MAX(0.0f,
-+			MIN(1.0f, rc.window_effects.blur_noise));
 +	} else if (!strcasecmp(nodename, "brightness.blur.windowEffects")) {
 +		set_float(content, &rc.window_effects.blur_brightness);
 +		rc.window_effects.blur_brightness = MAX(0.0f,
@@ -122,7 +117,7 @@ index ab0639d..e67e314 100644
  	} else if (!strcasecmp(nodename, "followMouse.focus")) {
  		set_bool(content, &rc.focus_follow_mouse);
  	} else if (!strcasecmp(nodename, "followMouseRequiresMovement.focus")) {
-@@ -1526,6 +1558,16 @@ rcxml_init(void)
+@@ -1526,6 +1554,15 @@ rcxml_init(void)
  	rc.corner_radius = 8;
  	rc.shadows_enabled = false;
  	rc.shadows_on_tiled = false;
@@ -132,7 +127,6 @@ index ab0639d..e67e314 100644
 +	rc.window_effects.blur_enabled = false;
 +	rc.window_effects.blur_passes = 3;
 +	rc.window_effects.blur_radius = 5;
-+	rc.window_effects.blur_noise = 0.02f;
 +	rc.window_effects.blur_brightness = 0.9f;
 +	rc.window_effects.blur_contrast = 0.9f;
 +	rc.window_effects.blur_saturation = 1.1f;
@@ -183,7 +177,7 @@ index c0c4cc5..744b70a 100644
  #include <wlr/types/wlr_cursor.h>
  #include <wlr/types/wlr_keyboard_group.h>
  #include <wlr/types/wlr_output_layout.h>
-@@ -459,10 +460,108 @@ view_discover_output(struct view *view, struct wlr_box *geometry)
+@@ -459,10 +460,107 @@ view_discover_output(struct view *view, struct wlr_box *geometry)
  	return false;
  }
  
@@ -276,7 +270,6 @@ index c0c4cc5..744b70a 100644
 +	wlr_scene_set_blur_data(server.scene,
 +		rc.window_effects.blur_passes,
 +		rc.window_effects.blur_radius,
-+		rc.window_effects.blur_noise,
 +		rc.window_effects.blur_brightness,
 +		rc.window_effects.blur_contrast,
 +		rc.window_effects.blur_saturation);
@@ -292,7 +285,7 @@ index c0c4cc5..744b70a 100644
  	ssd_set_active(view->ssd, activated);
  	if (view->impl->set_activated) {
  		view->impl->set_activated(view, activated);
-@@ -563,6 +662,7 @@ view_moved(struct view *view)
+@@ -563,6 +661,7 @@ view_moved(struct view *view)
  	}
  	view_update_outputs(view);
  	ssd_update_geometry(view->ssd);
@@ -300,7 +293,7 @@ index c0c4cc5..744b70a 100644
  	cursor_update_focus();
  	if (rc.resize_indicator && server.grabbed_view == view) {
  		resize_indicator_update(view);
-@@ -1676,6 +1776,7 @@ set_fullscreen(struct view *view, bool fullscreen)
+@@ -1676,6 +1775,7 @@ set_fullscreen(struct view *view, bool fullscreen)
  	}
  
  	view->fullscreen = fullscreen;
@@ -308,7 +301,7 @@ index c0c4cc5..744b70a 100644
  	wl_signal_emit_mutable(&view->events.fullscreened, NULL);
  
  	/* Re-show decorations when no longer fullscreen */
-@@ -2439,6 +2540,7 @@ view_set_shade(struct view *view, bool shaded)
+@@ -2439,6 +2539,7 @@ view_set_shade(struct view *view, bool shaded)
  		wlr_scene_node_set_enabled(&view->content_tree->node,
  			!view->shaded);
  	}

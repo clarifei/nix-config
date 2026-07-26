@@ -1,9 +1,117 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Rendy Sebpian <nightcoremosta@gmail.com>
-Date: Sun, 26 Jul 2026 23:16:48 +0700
-Subject: [PATCH] Improve precision and grain in blur shaders
+Date: Mon, 27 Jul 2026 01:11:05 +0700
+Subject: [PATCH] Remove blur noise and use high precision shaders
 
+---
+ include/render/fx_renderer/shaders.h         |  1 -
+ include/scenefx/types/fx/blur_data.h         |  1 -
+ include/scenefx/types/wlr_scene.h            |  5 +----
+ render/fx_renderer/fx_pass.c                 |  5 +----
+ render/fx_renderer/shaders.c                 |  1 -
+ render/fx_renderer/shaders/blur1.frag        |  6 +++++-
+ render/fx_renderer/shaders/blur2.frag        |  6 +++++-
+ render/fx_renderer/shaders/blur_effects.frag |  9 ---------
+ types/fx/blur_data.c                         |  6 +-----
+ types/scene/wlr_scene.c                      | 14 +-------------
+ 10 files changed, 14 insertions(+), 40 deletions(-)
 
+diff --git a/include/render/fx_renderer/shaders.h b/include/render/fx_renderer/shaders.h
+index f3a2bd5..f9d880f 100644
+--- a/include/render/fx_renderer/shaders.h
++++ b/include/render/fx_renderer/shaders.h
+@@ -168,7 +168,6 @@ struct blur_effects_shader {
+ 	GLint tex_proj;
+ 	GLint tex;
+ 	GLint pos_attrib;
+-	GLfloat noise;
+ 	GLfloat brightness;
+ 	GLfloat contrast;
+ 	GLfloat saturation;
+diff --git a/include/scenefx/types/fx/blur_data.h b/include/scenefx/types/fx/blur_data.h
+index 967c2a0..8258bd3 100644
+--- a/include/scenefx/types/fx/blur_data.h
++++ b/include/scenefx/types/fx/blur_data.h
+@@ -7,7 +7,6 @@
+ struct blur_data {
+ 	int num_passes;
+ 	float radius;
+-	float noise;
+ 	float brightness;
+ 	float contrast;
+ 	float saturation;
+diff --git a/include/scenefx/types/wlr_scene.h b/include/scenefx/types/wlr_scene.h
+index ac1bc49..aea68b0 100644
+--- a/include/scenefx/types/wlr_scene.h
++++ b/include/scenefx/types/wlr_scene.h
+@@ -413,7 +413,7 @@ struct wlr_scene *wlr_scene_create(void);
+ 
+ // Sets the global blur parameters
+ void wlr_scene_set_blur_data(struct wlr_scene *scene, int num_passes,
+-	int radius, float noise, float brightness, float contrast, float saturation);
++	int radius, float brightness, float contrast, float saturation);
+ 
+ // Sets the global blur num_passes parameter
+ void wlr_scene_set_blur_num_passes(struct wlr_scene *scene, int num_passes);
+@@ -421,9 +421,6 @@ void wlr_scene_set_blur_num_passes(struct wlr_scene *scene, int num_passes);
+ // Sets the global blur radius parameter
+ void wlr_scene_set_blur_radius(struct wlr_scene *scene, int radius);
+ 
+-// Sets the global blur noise parameter
+-void wlr_scene_set_blur_noise(struct wlr_scene *scene, float noise);
+-
+ // Sets the global blur brightness parameter
+ void wlr_scene_set_blur_brightness(struct wlr_scene *scene, float brightness);
+ 
+diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
+index 39b6226..8475d0f 100644
+--- a/render/fx_renderer/fx_pass.c
++++ b/render/fx_renderer/fx_pass.c
+@@ -955,7 +955,6 @@ static void render_blur_effects(struct fx_gles_render_pass *pass,
+ 	}
+ 
+ 	glUniform1i(shader.tex, 0);
+-	glUniform1f(shader.noise, blur_data->noise);
+ 	glUniform1f(shader.brightness, blur_data->brightness);
+ 	glUniform1f(shader.contrast, blur_data->contrast);
+ 	glUniform1f(shader.saturation, blur_data->saturation);
+@@ -1049,7 +1048,6 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
+ 	TRACY_ZONE_TEXT_f("\tBlur Radius: %f", fx_options->blur_data->radius);
+ 	TRACY_ZONE_TEXT_f("\tBrightness: %f", fx_options->blur_data->brightness);
+ 	TRACY_ZONE_TEXT_f("\tContrast: %f", fx_options->blur_data->contrast);
+-	TRACY_ZONE_TEXT_f("\tNoise: %f", fx_options->blur_data->noise);
+ 	TRACY_ZONE_TEXT_f("\tSaturation: %f", fx_options->blur_data->saturation);
+ 	push_fx_debug(renderer);
+ 
+@@ -1068,7 +1066,7 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
+ 
+ 	pixman_region32_fini(&scaled_damage);
+ 
+-	// Render additional blur effects like saturation, noise, contrast, etc...
++	// Render additional blur color adjustments.
+ 	if (blur_data_should_parameters_blur_effects(&blur_data)
+ 			&& pixman_region32_not_empty(&damage)) {
+ 		if (fx_options->current_buffer == pass->fx_offscreen_buffers->effects_buffer) {
+@@ -1211,7 +1209,6 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
+ 	TRACY_ZONE_TEXT_f("\tBlur Radius: %f", fx_options->blur_data->radius);
+ 	TRACY_ZONE_TEXT_f("\tBrightness: %f", fx_options->blur_data->brightness);
+ 	TRACY_ZONE_TEXT_f("\tContrast: %f", fx_options->blur_data->contrast);
+-	TRACY_ZONE_TEXT_f("\tNoise: %f", fx_options->blur_data->noise);
+ 	TRACY_ZONE_TEXT_f("\tSaturation: %f", fx_options->blur_data->saturation);
+ 	push_fx_debug(renderer);
+ 
+diff --git a/render/fx_renderer/shaders.c b/render/fx_renderer/shaders.c
+index 51cfe90..1f9ef58 100644
+--- a/render/fx_renderer/shaders.c
++++ b/render/fx_renderer/shaders.c
+@@ -352,7 +352,6 @@ bool link_blur_effects_program(struct blur_effects_shader *shader) {
+ 	shader->tex = glGetUniformLocation(prog, "tex");
+ 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
+ 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
+-	shader->noise = glGetUniformLocation(prog, "noise");
+ 	shader->brightness = glGetUniformLocation(prog, "brightness");
+ 	shader->contrast = glGetUniformLocation(prog, "contrast");
+ 	shader->saturation = glGetUniformLocation(prog, "saturation");
 diff --git a/render/fx_renderer/shaders/blur1.frag b/render/fx_renderer/shaders/blur1.frag
 index bb27600..f1fa72d 100644
 --- a/render/fx_renderer/shaders/blur1.frag
@@ -20,28 +128,6 @@ index bb27600..f1fa72d 100644
  uniform sampler2D tex;
  
  uniform float radius;
-diff --git a/render/fx_renderer/shaders/blur_effects.frag b/render/fx_renderer/shaders/blur_effects.frag
---- a/render/fx_renderer/shaders/blur_effects.frag
-+++ b/render/fx_renderer/shaders/blur_effects.frag
-@@ -45,14 +45,14 @@
--float noiseAmount(vec2 p) {
--	vec3 p3 = fract(vec3(p.xyx) * 1689.1984);
-+float noiseAmount(vec2 pixel) {
-+	vec3 p3 = fract(vec3(pixel.xyx) * vec3(0.1031, 0.1030, 0.0973));
- 	p3 += dot(p3, p3.yzx + 33.33);
- 	float hash = fract((p3.x + p3.y) * p3.z);
--	return (mod(hash, 1.0) - 0.5) * noise;
-+	return (hash - 0.5) * noise;
- }
- 
- void main() {
- 	vec4 color = texture2D(tex, v_texcoord);
- 	// Do *not* transpose the combined matrix when multiplying
- 	color = brightnessMatrix() * contrastMatrix() * saturationMatrix() * color;
--	color.xyz += noiseAmount(v_texcoord);
-+	color.xyz += noiseAmount(gl_FragCoord.xy);
- 	gl_FragColor = color;
- }
 diff --git a/render/fx_renderer/shaders/blur2.frag b/render/fx_renderer/shaders/blur2.frag
 index 2c947f2..2260e0e 100644
 --- a/render/fx_renderer/shaders/blur2.frag
@@ -58,3 +144,114 @@ index 2c947f2..2260e0e 100644
  uniform sampler2D tex;
  
  uniform float radius;
+diff --git a/render/fx_renderer/shaders/blur_effects.frag b/render/fx_renderer/shaders/blur_effects.frag
+index c3d3246..78bcf81 100644
+--- a/render/fx_renderer/shaders/blur_effects.frag
++++ b/render/fx_renderer/shaders/blur_effects.frag
+@@ -10,7 +10,6 @@ uniform sampler2D tex;
+ uniform float brightness;
+ uniform float contrast;
+ uniform float saturation;
+-uniform float noise;
+ 
+ mat4 brightnessMatrix() {
+ 	float b = brightness - 1.0;
+@@ -42,17 +41,9 @@ mat4 saturationMatrix() {
+ 				0, 0, 0, 1);
+ }
+ 
+-float noiseAmount(vec2 p) {
+-	vec3 p3 = fract(vec3(p.xyx) * 1689.1984);
+-	p3 += dot(p3, p3.yzx + 33.33);
+-	float hash = fract((p3.x + p3.y) * p3.z);
+-	return (mod(hash, 1.0) - 0.5) * noise;
+-}
+-
+ void main() {
+ 	vec4 color = texture2D(tex, v_texcoord);
+ 	// Do *not* transpose the combined matrix when multiplying
+ 	color = brightnessMatrix() * contrastMatrix() * saturationMatrix() * color;
+-	color.xyz += noiseAmount(v_texcoord);
+ 	gl_FragColor = color;
+ }
+diff --git a/types/fx/blur_data.c b/types/fx/blur_data.c
+index fcc8c74..ae8fef0 100644
+--- a/types/fx/blur_data.c
++++ b/types/fx/blur_data.c
+@@ -4,7 +4,6 @@ struct blur_data blur_data_get_default(void) {
+ 	return (struct blur_data) {
+ 		.radius = 5,
+ 		.num_passes = 3,
+-		.noise = 0.02,
+ 		.brightness = 0.9,
+ 		.contrast = 0.9,
+ 		.saturation = 1.1,
+@@ -18,8 +17,7 @@ bool is_scene_blur_enabled(struct blur_data *blur_data) {
+ bool blur_data_should_parameters_blur_effects(struct blur_data *blur_data) {
+ 	return blur_data->brightness != 1.0f
+ 		|| blur_data->saturation != 1.0f
+-		|| blur_data->contrast != 1.0f
+-		|| blur_data->noise > 0.0f;
++		|| blur_data->contrast != 1.0f;
+ }
+ 
+ int blur_data_calc_size(struct blur_data *blur_data) {
+@@ -33,7 +31,6 @@ static float lerp(float a, float b, float f) {
+ static void adjust_post_effects(struct blur_data *blur_data, float strength) {
+ 	blur_data->brightness = lerp(1.0, blur_data->brightness, strength);
+ 	blur_data->contrast = lerp(1.0, blur_data->contrast, strength);
+-	blur_data->noise = lerp(0.0, blur_data->noise, strength);
+ 	blur_data->saturation = lerp(1.0, blur_data->saturation, strength);
+ }
+ 
+@@ -60,4 +57,3 @@ struct blur_data blur_data_apply_strength(struct blur_data *ref_blur_data, float
+ 
+ 	return blur_data;
+ }
+-
+diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
+index 02532b1..8ca296d 100644
+--- a/types/scene/wlr_scene.c
++++ b/types/scene/wlr_scene.c
+@@ -1208,11 +1208,10 @@ void wlr_scene_blur_set_clipped_region(struct wlr_scene_blur *blur,
+ }
+ 
+ void wlr_scene_set_blur_data(struct wlr_scene *scene, int num_passes,
+-		int radius, float noise, float brightness, float contrast, float saturation) {
++		int radius, float brightness, float contrast, float saturation) {
+ 	struct blur_data *buff_data = &scene->blur_data;
+ 	if (buff_data->num_passes == num_passes
+ 			&& buff_data->radius == radius
+-			&& buff_data->noise == noise
+ 			&& buff_data->brightness == brightness
+ 			&& buff_data->contrast == contrast
+ 			&& buff_data->saturation == saturation) {
+@@ -1221,7 +1220,6 @@ void wlr_scene_set_blur_data(struct wlr_scene *scene, int num_passes,
+ 
+ 	buff_data->num_passes = num_passes;
+ 	buff_data->radius = radius;
+-	buff_data->noise = noise;
+ 	buff_data->brightness = brightness;
+ 	buff_data->contrast = contrast;
+ 	buff_data->saturation = saturation;
+@@ -1250,16 +1248,6 @@ void wlr_scene_set_blur_radius(struct wlr_scene *scene, int radius) {
+ 	scene_node_update(&scene->tree.node, NULL);
+ }
+ 
+-void wlr_scene_set_blur_noise(struct wlr_scene *scene, float noise) {
+-	struct blur_data *buff_data = &scene->blur_data;
+-	if (buff_data->noise == noise) {
+-		return;
+-	}
+-	buff_data->noise = noise;
+-	mark_all_optimized_blur_nodes_dirty(&scene->tree.node);
+-	scene_node_update(&scene->tree.node, NULL);
+-}
+-
+ void wlr_scene_set_blur_brightness(struct wlr_scene *scene, float brightness) {
+ 	struct blur_data *buff_data = &scene->blur_data;
+ 	if (buff_data->brightness == brightness) {
+-- 
+2.54.0
+
+

@@ -43,7 +43,7 @@ diff --git a/include/config/rcxml.h b/include/config/rcxml.h
 index 792a649..bb96cfb 100644
 --- a/include/config/rcxml.h
 +++ b/include/config/rcxml.h
-@@ -126,6 +126,10 @@ struct rcxml {
+@@ -125,6 +125,10 @@ struct rcxml {
  		float blur_brightness;
  		float blur_contrast;
  		float blur_saturation;
@@ -347,7 +347,7 @@ diff --git a/src/config/rcxml.c b/src/config/rcxml.c
 index e67e314..6e9758d 100644
 --- a/src/config/rcxml.c
 +++ b/src/config/rcxml.c
-@@ -1233,6 +1233,12 @@ entry(xmlNode *node, char *nodename, char *content)
+@@ -1229,6 +1229,12 @@ entry(xmlNode *node, char *nodename, char *content)
  		set_float(content, &rc.window_effects.blur_saturation);
  		rc.window_effects.blur_saturation = MAX(0.0f,
  			MIN(2.0f, rc.window_effects.blur_saturation));
@@ -360,7 +360,7 @@ index e67e314..6e9758d 100644
  	} else if (!strcasecmp(nodename, "followMouse.focus")) {
  		set_bool(content, &rc.focus_follow_mouse);
  	} else if (!strcasecmp(nodename, "followMouseRequiresMovement.focus")) {
-@@ -1568,6 +1574,8 @@ rcxml_init(void)
+@@ -1563,6 +1569,8 @@ rcxml_init(void)
  	rc.window_effects.blur_brightness = 0.9f;
  	rc.window_effects.blur_contrast = 0.9f;
  	rc.window_effects.blur_saturation = 1.1f;
@@ -590,7 +590,7 @@ index 744b70a..07dfd63 100644
  #include "menu/menu.h"
  #include "output.h"
  #include "placement.h"
-@@ -554,6 +555,7 @@ view_effects_reconfigure(void)
+@@ -553,6 +554,7 @@ view_effects_reconfigure(void)
  		rc.window_effects.blur_contrast,
  		rc.window_effects.blur_saturation);
  	view_effects_update_all();
