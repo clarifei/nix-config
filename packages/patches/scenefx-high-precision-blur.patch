@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Rendy Sebpian <nightcoremosta@gmail.com>
 Date: Sun, 26 Jul 2026 23:16:48 +0700
-Subject: [PATCH] Use high precision in blur shaders
+Subject: [PATCH] Improve precision and grain in blur shaders
 
 
 diff --git a/render/fx_renderer/shaders/blur1.frag b/render/fx_renderer/shaders/blur1.frag
@@ -20,6 +20,28 @@ index bb27600..f1fa72d 100644
  uniform sampler2D tex;
  
  uniform float radius;
+diff --git a/render/fx_renderer/shaders/blur_effects.frag b/render/fx_renderer/shaders/blur_effects.frag
+--- a/render/fx_renderer/shaders/blur_effects.frag
++++ b/render/fx_renderer/shaders/blur_effects.frag
+@@ -45,14 +45,14 @@
+-float noiseAmount(vec2 p) {
+-	vec3 p3 = fract(vec3(p.xyx) * 1689.1984);
++float noiseAmount(vec2 pixel) {
++	vec3 p3 = fract(vec3(pixel.xyx) * vec3(0.1031, 0.1030, 0.0973));
+ 	p3 += dot(p3, p3.yzx + 33.33);
+ 	float hash = fract((p3.x + p3.y) * p3.z);
+-	return (mod(hash, 1.0) - 0.5) * noise;
++	return (hash - 0.5) * noise;
+ }
+ 
+ void main() {
+ 	vec4 color = texture2D(tex, v_texcoord);
+ 	// Do *not* transpose the combined matrix when multiplying
+ 	color = brightnessMatrix() * contrastMatrix() * saturationMatrix() * color;
+-	color.xyz += noiseAmount(v_texcoord);
++	color.xyz += noiseAmount(gl_FragCoord.xy);
+ 	gl_FragColor = color;
+ }
 diff --git a/render/fx_renderer/shaders/blur2.frag b/render/fx_renderer/shaders/blur2.frag
 index 2c947f2..2260e0e 100644
 --- a/render/fx_renderer/shaders/blur2.frag

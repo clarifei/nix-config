@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Rendy Sebpian <nightcoremosta@gmail.com>
+Date: Mon, 27 Jul 2026 00:37:50 +0700
+Subject: [PATCH] Keep the Noctalia bar solid
+
+---
+ src/shell/bar/bar.cpp | 35 -----------------------------------
+ src/shell/bar/bar.h   |  1 -
+ 2 files changed, 36 deletions(-)
+
+diff --git a/src/shell/bar/bar.cpp b/src/shell/bar/bar.cpp
+index fa29865..5020a2c 100644
+--- a/src/shell/bar/bar.cpp
++++ b/src/shell/bar/bar.cpp
+@@ -1704,7 +1704,6 @@ void Bar::syncBarExclusiveZone(BarInstance& instance) {
+ 
+ void Bar::syncBarSurfaceChrome(BarInstance& instance) {
+   syncBarExclusiveZone(instance);
+-  applyBarCompositorBlur(instance);
+ }
+ 
+ std::optional<LayerPopupParentContext> Bar::popupParentContextForSurface(wl_surface* surface) const noexcept {
+@@ -2725,40 +2724,6 @@ void Bar::syncBarSlideLayerTransform(BarInstance& instance) const {
+   }
+ }
+ 
+-void Bar::applyBarCompositorBlur(BarInstance& instance) const {
+-  if (instance.surface == nullptr) {
+-    return;
+-  }
+-  if (!barContentVisuallyShown(instance)) {
+-    instance.surface->clearBlurRegion();
+-    return;
+-  }
+-
+-  if (instance.bg == nullptr) {
+-    return;
+-  }
+-  float absX = 0.0f;
+-  float absY = 0.0f;
+-  Node::absolutePosition(instance.bg, absX, absY);
+-  const int px = static_cast<int>(std::lround(absX));
+-  const int py = static_cast<int>(std::lround(absY));
+-  const int pw = static_cast<int>(std::lround(std::max(0.0f, instance.bg->width())));
+-  const int ph = static_cast<int>(std::lround(std::max(0.0f, instance.bg->height())));
+-  const auto concave = barConcaveShape(instance.barConfig);
+-  // The bg node is the visual rect; tessellateShape expects the body rect and
+-  // expands it outward by logicalInset itself. With all-convex corners and no
+-  // inset it takes its own fast path down to a plain rounded rect.
+-  const int insetL = static_cast<int>(std::lround(concave.logicalInset.left));
+-  const int insetT = static_cast<int>(std::lround(concave.logicalInset.top));
+-  const int insetR = static_cast<int>(std::lround(concave.logicalInset.right));
+-  const int insetB = static_cast<int>(std::lround(concave.logicalInset.bottom));
+-  auto blurStrips = Surface::tessellateShape(
+-      px + insetL, py + insetT, pw - insetL - insetR, ph - insetT - insetB, concave.corners, concave.logicalInset,
+-      concave.radii
+-  );
+-  instance.surface->setBlurRegion(blurStrips);
+-}
+-
+ void Bar::startHideFadeOut(BarInstance& instance) {
+   if (instance.autoHideDisablePending || instance.smartAutoHidePinnedVisible) {
+     return;
+diff --git a/src/shell/bar/bar.h b/src/shell/bar/bar.h
+index 94fa58c..bf40269 100644
+--- a/src/shell/bar/bar.h
++++ b/src/shell/bar/bar.h
+@@ -125,7 +125,6 @@ private:
+   void buildScene(BarInstance& instance, std::uint32_t width, std::uint32_t height);
+   void prepareFrame(BarInstance& instance, bool needsUpdate, bool needsLayout);
+   void updateWidgets(BarInstance& instance);
+-  void applyBarCompositorBlur(BarInstance& instance) const;
+   void syncBarSlideLayerTransform(BarInstance& instance) const;
+   void syncBarAutoHideInputRegion(BarInstance& instance) const;
+   void syncBarExclusiveZone(BarInstance& instance);
+-- 
+2.54.0
+
+

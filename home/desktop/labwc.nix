@@ -1,3 +1,6 @@
+let
+  effectsOpacity = 0.95;
+in
 {
   imports = [ ./labwc-keybinds.nix ];
 
@@ -26,14 +29,18 @@
       };
       windowEffects = {
         enabled = "yes";
-        activeOpacity = 0.88;
+        activeOpacity = effectsOpacity;
         inactiveOpacity = 0.80;
+        layerShell = {
+          enabled = "yes";
+          opacity = effectsOpacity;
+        };
         blur = {
           enabled = "yes";
-          # Dual-Kawase blur scales exponentially with passes; 4/4 avoids broad contours.
-          passes = 4;
+          # Dual-Kawase blur scales exponentially with the number of passes.
+          passes = 2;
           radius = 4;
-          noise = 0.02;
+          noise = 0;
           brightness = 0.9;
           contrast = 0.9;
           saturation = 1.1;

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Rendy Sebpian <nightcoremosta@gmail.com>
 Date: Sun, 26 Jul 2026 23:15:40 +0700
-Subject: [PATCH 3/3] Document SceneFX window effects
+Subject: [PATCH 4/4] Document SceneFX window effects
 
 
 diff --git a/docs/labwc-actions.5.scd b/docs/labwc-actions.5.scd
@@ -23,16 +23,20 @@ diff --git a/docs/labwc-config.5.scd b/docs/labwc-config.5.scd
 index 6a16b89..97d4e1b 100644
 --- a/docs/labwc-config.5.scd
 +++ b/docs/labwc-config.5.scd
-@@ -679,6 +679,40 @@ extending outward from the snapped edge.
+@@ -679,6 +679,52 @@ extending outward from the snapped edge.
  	Font weight (normal, thin, ultralight, light, semilight, book, medium,
  	semibold, bold, ultrabold, heavy, ultraheavy). Default is normal.
  
 +## WINDOW EFFECTS
 +
 +Window effects apply to the content of regular Wayland and XWayland windows.
-+Layer-shell surfaces, popups, menus, server-side decorations and captured
-+window content are unaffected. Fullscreen windows are always opaque and have
-+blur disabled to preserve direct scanout.
++Popups, menus, server-side decorations and captured window content are
++unaffected. Fullscreen windows are always opaque and have blur disabled to
++preserve direct scanout.
++
++Layer-shell effects apply only to surfaces that request a non-empty blur
++region using ext-background-effect-v1. This lets clients select which shell
++surfaces participate in compositor opacity and blur.
 +
 +*<windowEffects><enabled>* [yes|no]
 +	Enable window opacity and blur. Default is no.
@@ -42,6 +46,14 @@ index 6a16b89..97d4e1b 100644
 +
 +*<windowEffects><inactiveOpacity>*
 +	Opacity of inactive windows, between 0.0 and 1.0. Default is 1.0.
++
++*<windowEffects><layerShell><enabled>* [yes|no]
++	Enable opacity and blur for participating layer-shell surfaces. Default
++	is no.
++
++*<windowEffects><layerShell><opacity>*
++	Opacity of participating layer-shell surfaces, between 0.0 and 1.0.
++	Default is 1.0.
 +
 +*<windowEffects><blur><enabled>* [yes|no]
 +	Blur the scene behind translucent windows. Default is no.
@@ -68,7 +80,7 @@ diff --git a/docs/rc.xml.all b/docs/rc.xml.all
 index 350d2ea..de4dd66 100644
 --- a/docs/rc.xml.all
 +++ b/docs/rc.xml.all
-@@ -78,6 +78,21 @@
+@@ -78,6 +78,25 @@
      </font>
    </theme>
  
@@ -76,6 +88,10 @@ index 350d2ea..de4dd66 100644
 +    <enabled>no</enabled>
 +    <activeOpacity>1.0</activeOpacity>
 +    <inactiveOpacity>1.0</inactiveOpacity>
++    <layerShell>
++      <enabled>no</enabled>
++      <opacity>1.0</opacity>
++    </layerShell>
 +    <blur>
 +      <enabled>no</enabled>
 +      <passes>3</passes>

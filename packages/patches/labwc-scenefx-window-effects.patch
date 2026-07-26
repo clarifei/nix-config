@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Rendy Sebpian <nightcoremosta@gmail.com>
 Date: Sun, 26 Jul 2026 23:15:23 +0700
-Subject: [PATCH 2/3] Add configurable window opacity and blur
+Subject: [PATCH 2/4] Add configurable window opacity and blur
 
 
 diff --git a/include/config/rcxml.h b/include/config/rcxml.h

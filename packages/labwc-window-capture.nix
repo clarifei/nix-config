@@ -50,6 +50,7 @@ in
   patches = (old.patches or [ ]) ++ [
     ./patches/labwc-scenefx-renderer.patch
     ./patches/labwc-scenefx-window-effects.patch
+    ./patches/labwc-scenefx-background-effects.patch
     ./patches/labwc-scenefx-window-effects-docs.patch
   ];
 

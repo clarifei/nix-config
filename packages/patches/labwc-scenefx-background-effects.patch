@@ -1,0 +1,602 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Rendy Sebpian <nightcoremosta@gmail.com>
+Date: Mon, 27 Jul 2026 00:31:08 +0700
+Subject: [PATCH 3/4] Add layer-shell background effects
+
+---
+ include/background-effects.h |  15 +++
+ include/config/rcxml.h       |   4 +
+ include/layers.h             |   8 ++
+ protocols/meson.build        |   1 +
+ src/background-effects.c     | 241 +++++++++++++++++++++++++++++++++++
+ src/config/rcxml.c           |   8 ++
+ src/layers.c                 | 115 +++++++++++++++++
+ src/meson.build              |   1 +
+ src/server.c                 |   3 +
+ src/view.c                   |   2 +
+ 10 files changed, 398 insertions(+)
+ create mode 100644 include/background-effects.h
+ create mode 100644 src/background-effects.c
+
+diff --git a/include/background-effects.h b/include/background-effects.h
+new file mode 100644
+index 0000000..fc97f25
+--- /dev/null
++++ b/include/background-effects.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef LABWC_BACKGROUND_EFFECTS_H
++#define LABWC_BACKGROUND_EFFECTS_H
++
++#include <pixman.h>
++
++struct wl_display;
++struct wlr_surface;
++
++void background_effects_init(struct wl_display *display);
++
++const pixman_region32_t *background_effects_get_blur_region(
++	struct wlr_surface *surface);
++
++#endif /* LABWC_BACKGROUND_EFFECTS_H */
+diff --git a/include/config/rcxml.h b/include/config/rcxml.h
+index 792a649..bb96cfb 100644
+--- a/include/config/rcxml.h
++++ b/include/config/rcxml.h
+@@ -126,6 +126,10 @@ struct rcxml {
+ 		float blur_brightness;
+ 		float blur_contrast;
+ 		float blur_saturation;
++		struct {
++			bool enabled;
++			float opacity;
++		} layer_shell;
+ 	} window_effects;
+ 	struct font font_activewindow;
+ 	struct font font_inactivewindow;
+diff --git a/include/layers.h b/include/layers.h
+index 8aaf23d..5cf8d08 100644
+--- a/include/layers.h
++++ b/include/layers.h
+@@ -8,10 +8,16 @@
+ struct server;
+ struct output;
+ struct seat;
++struct wlr_scene_blur;
++struct wlr_surface;
+ 
+ struct lab_layer_surface {
+ 	struct wlr_layer_surface_v1 *layer_surface;
+ 	struct wlr_scene_layer_surface_v1 *scene_layer_surface;
++	struct wl_list link;
++	struct {
++		struct wlr_scene_blur *blur;
++	} effects;
+ 
+ 	bool mapped;
+ 	/* true only inside handle_unmap() */
+@@ -43,6 +49,8 @@ void layers_init(void);
+ void layers_finish(void);
+ 
+ void layers_arrange(struct output *output);
++void layers_effects_reconfigure(void);
++void layers_surface_effects_update(struct wlr_surface *surface);
+ void layer_try_set_focus(struct seat *seat,
+ 	struct wlr_layer_surface_v1 *layer_surface);
+ 
+diff --git a/protocols/meson.build b/protocols/meson.build
+index 928bd60..3b19008 100644
+--- a/protocols/meson.build
++++ b/protocols/meson.build
+@@ -14,6 +14,7 @@ wayland_scanner_server = generator(
+ )
+ 
+ server_protocols = [
++	join_paths(wl_protocol_dir, 'staging/ext-background-effect/ext-background-effect-v1.xml'),
+ 	'wlr-layer-shell-unstable-v1.xml',
+ 	'wlr-output-power-management-unstable-v1.xml',
+ ]
+diff --git a/src/background-effects.c b/src/background-effects.c
+new file mode 100644
+index 0000000..f2ee05f
+--- /dev/null
++++ b/src/background-effects.c
+@@ -0,0 +1,241 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include "background-effects.h"
++#include <assert.h>
++#include <stdbool.h>
++#include <stdlib.h>
++#include <wayland-server-core.h>
++#include <wlr/types/wlr_compositor.h>
++#include <wlr/util/addon.h>
++#include "common/mem.h"
++#include "ext-background-effect-v1-protocol.h"
++#include "layers.h"
++
++#define LAB_EXT_BACKGROUND_EFFECT_VERSION 1
++
++struct background_effect_state {
++	pixman_region32_t blur_region;
++	bool committed;
++};
++
++struct background_effect_surface {
++	struct wl_resource *resource;
++	struct wlr_surface *surface;
++	struct wlr_addon addon;
++	struct wlr_surface_synced synced;
++	struct background_effect_state pending;
++	struct background_effect_state current;
++};
++
++static const struct ext_background_effect_surface_v1_interface surface_impl;
++
++static struct background_effect_surface *
++surface_from_resource(struct wl_resource *resource)
++{
++	assert(wl_resource_instance_of(resource,
++		&ext_background_effect_surface_v1_interface, &surface_impl));
++	return wl_resource_get_user_data(resource);
++}
++
++static void
++surface_destroy(struct background_effect_surface *surface)
++{
++	if (!surface) {
++		return;
++	}
++	wlr_surface_synced_finish(&surface->synced);
++	wlr_addon_finish(&surface->addon);
++	wl_resource_set_user_data(surface->resource, NULL);
++	free(surface);
++}
++
++static void
++handle_surface_resource_destroy(struct wl_resource *resource)
++{
++	surface_destroy(surface_from_resource(resource));
++}
++
++static void
++handle_surface_destroy(struct wl_client *client, struct wl_resource *resource)
++{
++	wl_resource_destroy(resource);
++}
++
++static void
++handle_set_blur_region(struct wl_client *client, struct wl_resource *resource,
++	struct wl_resource *region_resource)
++{
++	struct background_effect_surface *surface =
++		surface_from_resource(resource);
++	if (!surface) {
++		wl_resource_post_error(resource,
++			EXT_BACKGROUND_EFFECT_SURFACE_V1_ERROR_SURFACE_DESTROYED,
++			"the wl_surface object has been destroyed");
++		return;
++	}
++
++	pixman_region32_clear(&surface->pending.blur_region);
++	if (region_resource) {
++		pixman_region32_copy(&surface->pending.blur_region,
++			wlr_region_from_resource(region_resource));
++	}
++	surface->pending.committed = true;
++}
++
++static const struct ext_background_effect_surface_v1_interface surface_impl = {
++	.destroy = handle_surface_destroy,
++	.set_blur_region = handle_set_blur_region,
++};
++
++static void
++state_init(void *data)
++{
++	struct background_effect_state *state = data;
++	pixman_region32_init(&state->blur_region);
++}
++
++static void
++state_finish(void *data)
++{
++	struct background_effect_state *state = data;
++	pixman_region32_fini(&state->blur_region);
++}
++
++static void
++state_move(void *destination, void *source)
++{
++	struct background_effect_state *dst = destination;
++	struct background_effect_state *src = source;
++	if (src->committed) {
++		pixman_region32_copy(&dst->blur_region, &src->blur_region);
++	}
++	dst->committed = src->committed;
++	src->committed = false;
++}
++
++static void
++state_commit(struct wlr_surface_synced *synced)
++{
++	struct background_effect_surface *surface =
++		wl_container_of(synced, surface, synced);
++	layers_surface_effects_update(surface->surface);
++}
++
++static const struct wlr_surface_synced_impl synced_impl = {
++	.state_size = sizeof(struct background_effect_state),
++	.init_state = state_init,
++	.finish_state = state_finish,
++	.move_state = state_move,
++	.commit = state_commit,
++};
++
++static void
++handle_surface_addon_destroy(struct wlr_addon *addon)
++{
++	struct background_effect_surface *surface =
++		wl_container_of(addon, surface, addon);
++	surface_destroy(surface);
++}
++
++static const struct wlr_addon_interface surface_addon_impl = {
++	.name = "ext_background_effect_surface_v1",
++	.destroy = handle_surface_addon_destroy,
++};
++
++static struct background_effect_surface *
++surface_from_wlr_surface(struct wlr_surface *surface)
++{
++	struct wlr_addon *addon =
++		wlr_addon_find(&surface->addons, NULL, &surface_addon_impl);
++	if (!addon) {
++		return NULL;
++	}
++	struct background_effect_surface *effect;
++	return wl_container_of(addon, effect, addon);
++}
++
++static void
++handle_manager_destroy(struct wl_client *client, struct wl_resource *resource)
++{
++	wl_resource_destroy(resource);
++}
++
++static void
++handle_get_background_effect(struct wl_client *client,
++	struct wl_resource *manager_resource, uint32_t id,
++	struct wl_resource *surface_resource)
++{
++	struct wlr_surface *wlr_surface =
++		wlr_surface_from_resource(surface_resource);
++	if (surface_from_wlr_surface(wlr_surface)) {
++		wl_resource_post_error(manager_resource,
++			EXT_BACKGROUND_EFFECT_MANAGER_V1_ERROR_BACKGROUND_EFFECT_EXISTS,
++			"the wl_surface already has a background effect "
++			"object");
++		return;
++	}
++
++	struct background_effect_surface *surface = calloc(1, sizeof(*surface));
++	if (!surface) {
++		wl_resource_post_no_memory(manager_resource);
++		return;
++	}
++	if (!wlr_surface_synced_init(&surface->synced, wlr_surface,
++		    &synced_impl, &surface->pending, &surface->current)) {
++		free(surface);
++		wl_resource_post_no_memory(manager_resource);
++		return;
++	}
++
++	surface->resource = wl_resource_create(client,
++		&ext_background_effect_surface_v1_interface,
++		wl_resource_get_version(manager_resource), id);
++	if (!surface->resource) {
++		wlr_surface_synced_finish(&surface->synced);
++		free(surface);
++		wl_resource_post_no_memory(manager_resource);
++		return;
++	}
++
++	surface->surface = wlr_surface;
++	wlr_addon_init(&surface->addon, &wlr_surface->addons, NULL,
++		&surface_addon_impl);
++	wl_resource_set_implementation(surface->resource, &surface_impl,
++		surface, handle_surface_resource_destroy);
++}
++
++static const struct ext_background_effect_manager_v1_interface manager_impl = {
++	.destroy = handle_manager_destroy,
++	.get_background_effect = handle_get_background_effect,
++};
++
++static void
++handle_manager_bind(struct wl_client *client, void *data, uint32_t version,
++	uint32_t id)
++{
++	struct wl_resource *resource = wl_resource_create(client,
++		&ext_background_effect_manager_v1_interface, version, id);
++	if (!resource) {
++		wl_client_post_no_memory(client);
++		return;
++	}
++	wl_resource_set_implementation(resource, &manager_impl, NULL, NULL);
++	ext_background_effect_manager_v1_send_capabilities(resource,
++		EXT_BACKGROUND_EFFECT_MANAGER_V1_CAPABILITY_BLUR);
++}
++
++void
++background_effects_init(struct wl_display *display)
++{
++	struct wl_global *global = wl_global_create(display,
++		&ext_background_effect_manager_v1_interface,
++		LAB_EXT_BACKGROUND_EFFECT_VERSION, NULL, handle_manager_bind);
++	die_if_null(global);
++}
++
++const pixman_region32_t *
++background_effects_get_blur_region(struct wlr_surface *wlr_surface)
++{
++	struct background_effect_surface *surface =
++		surface_from_wlr_surface(wlr_surface);
++	return surface ? &surface->current.blur_region : NULL;
++}
+diff --git a/src/config/rcxml.c b/src/config/rcxml.c
+index e67e314..6e9758d 100644
+--- a/src/config/rcxml.c
++++ b/src/config/rcxml.c
+@@ -1233,6 +1233,12 @@ entry(xmlNode *node, char *nodename, char *content)
+ 		set_float(content, &rc.window_effects.blur_saturation);
+ 		rc.window_effects.blur_saturation = MAX(0.0f,
+ 			MIN(2.0f, rc.window_effects.blur_saturation));
++	} else if (!strcasecmp(nodename, "enabled.layerShell.windowEffects")) {
++		set_bool(content, &rc.window_effects.layer_shell.enabled);
++	} else if (!strcasecmp(nodename, "opacity.layerShell.windowEffects")) {
++		set_float(content, &rc.window_effects.layer_shell.opacity);
++		rc.window_effects.layer_shell.opacity = MAX(0.0f,
++			MIN(1.0f, rc.window_effects.layer_shell.opacity));
+ 	} else if (!strcasecmp(nodename, "followMouse.focus")) {
+ 		set_bool(content, &rc.focus_follow_mouse);
+ 	} else if (!strcasecmp(nodename, "followMouseRequiresMovement.focus")) {
+@@ -1568,6 +1574,8 @@ rcxml_init(void)
+ 	rc.window_effects.blur_brightness = 0.9f;
+ 	rc.window_effects.blur_contrast = 0.9f;
+ 	rc.window_effects.blur_saturation = 1.1f;
++	rc.window_effects.layer_shell.enabled = false;
++	rc.window_effects.layer_shell.opacity = 1.0f;
+ 
+ 	rc.gap = 0;
+ 	rc.adaptive_sync = LAB_ADAPTIVE_SYNC_DISABLED;
+diff --git a/src/layers.c b/src/layers.c
+index 4a2e757..3c93b1f 100644
+--- a/src/layers.c
++++ b/src/layers.c
+@@ -8,15 +8,19 @@
+ 
+ #include "layers.h"
+ #include <assert.h>
++#include <pixman.h>
+ #include <stdbool.h>
+ #include <stdlib.h>
+ #include <strings.h>
++#include <wlr/types/wlr_alpha_modifier_v1.h>
+ #include <wlr/types/wlr_cursor.h>
+ #include <wlr/types/wlr_fractional_scale_v1.h>
+ #include <wlr/types/wlr_layer_shell_v1.h>
+ #include <scenefx/types/wlr_scene.h>
+ #include <wlr/types/wlr_xdg_shell.h>
+ #include <wlr/util/log.h>
++#include "background-effects.h"
++#include "common/list.h"
+ #include "common/macros.h"
+ #include "common/mem.h"
+ #include "config/rcxml.h"
+@@ -26,6 +30,108 @@
+ 
+ #define LAB_LAYERSHELL_VERSION 4
+ 
++static struct wl_list layer_surfaces = WL_LIST_INIT(&layer_surfaces);
++
++static void
++set_layer_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
++{
++	(void)sx;
++	(void)sy;
++	float opacity = *(float *)data;
++	struct wlr_scene_surface *surface =
++		wlr_scene_surface_try_from_buffer(buffer);
++	if (surface) {
++		const struct wlr_alpha_modifier_surface_v1_state *alpha =
++			wlr_alpha_modifier_v1_get_surface_state(
++				surface->surface);
++		if (alpha) {
++			opacity *= alpha->multiplier;
++		}
++	}
++	wlr_scene_buffer_set_opacity(buffer, opacity);
++}
++
++struct mask_lookup {
++	struct wlr_surface *surface;
++	struct wlr_scene_buffer *buffer;
++};
++
++static void
++find_surface_buffer(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
++{
++	(void)sx;
++	(void)sy;
++	struct mask_lookup *lookup = data;
++	struct wlr_scene_surface *surface =
++		wlr_scene_surface_try_from_buffer(buffer);
++	if (!lookup->buffer && surface && surface->surface == lookup->surface) {
++		lookup->buffer = buffer;
++	}
++}
++
++static void
++layer_effects_update(struct lab_layer_surface *layer)
++{
++	struct wlr_surface *surface = layer->layer_surface->surface;
++	const pixman_region32_t *requested_region =
++		background_effects_get_blur_region(surface);
++	pixman_region32_t region;
++	pixman_region32_init(&region);
++	if (requested_region && surface->current.width > 0
++		&& surface->current.height > 0) {
++		pixman_region32_intersect_rect(&region, requested_region, 0, 0,
++			surface->current.width, surface->current.height);
++	}
++
++	bool requested = pixman_region32_not_empty(&region);
++	bool enabled = rc.window_effects.enabled
++		&& rc.window_effects.layer_shell.enabled && requested;
++	float opacity = enabled ? rc.window_effects.layer_shell.opacity : 1.0f;
++	wlr_scene_node_for_each_buffer(&layer->scene_layer_surface->tree->node,
++		set_layer_opacity, &opacity);
++
++	bool blur_enabled = enabled
++		&& rc.window_effects.blur_enabled;
++	if (blur_enabled) {
++		const pixman_box32_t *extents =
++			pixman_region32_extents(&region);
++		wlr_scene_node_set_position(&layer->effects.blur->node,
++			extents->x1, extents->y1);
++		wlr_scene_blur_set_size(layer->effects.blur,
++			extents->x2 - extents->x1, extents->y2 - extents->y1);
++
++		struct mask_lookup lookup = {.surface = surface};
++		wlr_scene_node_for_each_buffer(
++			&layer->scene_layer_surface->tree->node,
++			find_surface_buffer, &lookup);
++		if (lookup.buffer) {
++			wlr_scene_blur_set_transparency_mask_source(
++				layer->effects.blur, lookup.buffer);
++		}
++	}
++	wlr_scene_node_set_enabled(&layer->effects.blur->node, blur_enabled);
++	pixman_region32_fini(&region);
++}
++
++void
++layers_surface_effects_update(struct wlr_surface *surface)
++{
++	struct wlr_layer_surface_v1 *layer_surface =
++		wlr_layer_surface_v1_try_from_wlr_surface(surface);
++	if (layer_surface && layer_surface->data) {
++		layer_effects_update(layer_surface->data);
++	}
++}
++
++void
++layers_effects_reconfigure(void)
++{
++	struct lab_layer_surface *layer;
++	wl_list_for_each(layer, &layer_surfaces, link) {
++		layer_effects_update(layer);
++	}
++}
++
+ static void
+ apply_override(struct output *output, struct wlr_box *usable_area)
+ {
+@@ -263,6 +369,7 @@ handle_surface_commit(struct wl_listener *listener, void *data)
+ 
+ 	uint32_t committed = layer_surface->current.committed;
+ 	struct output *output = (struct output *)wlr_output->data;
++	layer_effects_update(layer);
+ 
+ 	/* Process layer change */
+ 	if (committed & WLR_LAYER_SURFACE_V1_STATE_LAYER) {
+@@ -348,6 +455,8 @@ handle_node_destroy(struct wl_listener *listener, void *data)
+ 	wl_list_remove(&layer->new_popup.link);
+ 	wl_list_remove(&layer->output_destroy.link);
+ 	wl_list_remove(&layer->node_destroy.link);
++	wl_list_remove(&layer->link);
++	layer->layer_surface->data = NULL;
+ 	free(layer);
+ }
+ 
+@@ -681,6 +790,8 @@ handle_new_layer_surface(struct wl_listener *listener, void *data)
+ 
+ 	struct lab_layer_surface *surface = znew(*surface);
+ 	surface->layer_surface = layer_surface;
++	layer_surface->data = surface;
++	wl_list_insert(&layer_surfaces, &surface->link);
+ 
+ 	struct output *output = layer_surface->output->data;
+ 
+@@ -693,6 +804,10 @@ handle_new_layer_surface(struct wl_listener *listener, void *data)
+ 	surface->scene_layer_surface = wlr_scene_layer_surface_v1_create(
+ 		selected_layer, layer_surface);
+ 	die_if_null(surface->scene_layer_surface);
++	surface->effects.blur =
++		wlr_scene_blur_create(surface->scene_layer_surface->tree, 0, 0);
++	die_if_null(surface->effects.blur);
++	wlr_scene_node_lower_to_bottom(&surface->effects.blur->node);
+ 
+ 	/* In support of IME popup */
+ 	layer_surface->surface->data = surface->scene_layer_surface->tree;
+diff --git a/src/meson.build b/src/meson.build
+index 05163cf..a96d22b 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -1,5 +1,6 @@
+ labwc_sources = files(
+   'action.c',
++  'background-effects.c',
+   'buffer.c',
+   'debug.c',
+   'desktop.c',
+diff --git a/src/server.c b/src/server.c
+index e93413c..83b6f0c 100644
+--- a/src/server.c
++++ b/src/server.c
+@@ -53,6 +53,7 @@
+ #endif
+ 
+ #include "action.h"
++#include "background-effects.h"
+ #include "common/macros.h"
+ #include "common/mem.h"
+ #include "common/scene-helpers.h"
+@@ -263,6 +264,7 @@ allow_for_sandbox(const struct wlr_security_context_v1_state *security_state,
+ 		"xdg_wm_dialog_v1",
+ 		/* plus */
+ 		"wp_alpha_modifier_v1",
++		"ext_background_effect_manager_v1",
+ 		"wp_color_manager_v1",
+ 		"wp_color_representation_manager_v1",
+ 		"wp_linux_drm_syncobj_manager_v1",
+@@ -768,6 +770,7 @@ server_init(void)
+ 			server.wl_display, LAB_EXT_FOREIGN_TOPLEVEL_LIST_VERSION);
+ 
+ 	wlr_alpha_modifier_v1_create(server.wl_display);
++	background_effects_init(server.wl_display);
+ 
+ 	session_lock_init();
+ 
+diff --git a/src/view.c b/src/view.c
+index 744b70a..07dfd63 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -21,6 +21,7 @@
+ #include "foreign-toplevel/foreign.h"
+ #include "input/keyboard.h"
+ #include "labwc.h"
++#include "layers.h"
+ #include "menu/menu.h"
+ #include "output.h"
+ #include "placement.h"
+@@ -554,6 +555,7 @@ view_effects_reconfigure(void)
+ 		rc.window_effects.blur_contrast,
+ 		rc.window_effects.blur_saturation);
+ 	view_effects_update_all();
++	layers_effects_reconfigure();
+ }
+ 
+ void
+-- 
+2.54.0
