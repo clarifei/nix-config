@@ -5,8 +5,14 @@
   ...
 }:
 
+let
+  labwc = pkgs.callPackage ../packages/labwc-window-capture.nix { };
+in
 {
-  programs.labwc.enable = true;
+  programs.labwc = {
+    enable = true;
+    package = labwc;
+  };
 
   services.greetd = {
     enable = true;

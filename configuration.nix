@@ -8,6 +8,7 @@
     ./modules/labwc.nix
     ./modules/nix.nix
     ./modules/noctalia.nix
+    ./modules/screen-sharing.nix
     ./modules/swap.nix
     ./modules/system.nix
   ];
