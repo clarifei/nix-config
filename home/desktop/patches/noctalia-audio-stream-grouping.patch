@@ -1,45 +1,97 @@
-diff --git a/src/pipewire/pipewire_service.h b/src/pipewire/pipewire_service.h
---- a/src/pipewire/pipewire_service.h
-+++ b/src/pipewire/pipewire_service.h
-@@ -222,6 +222,7 @@ private:
-   void recomputeEffectiveMute(NodeData& nd);
-   void setNodeVolume(std::uint32_t id, float volume);
-   void setNodeMuted(std::uint32_t id, bool muted);
-+  [[nodiscard]] std::vector<std::uint32_t> programOutputGroupIds(std::uint32_t id) const;
+diff --git a/meson.build b/meson.build
+index caf7216..dbd2f3a 100644
+--- a/meson.build
++++ b/meson.build
+@@ -1186,6 +1186,13 @@ audio_glyphs_test = executable('audio_glyphs_test',
  
-   // Target volume for one relative-adjust event: current + base step for a tap, or a
-   // repeat-rate-independent velocity ramp accumulated on a gesture-local target while held.
-@@ -240,6 +241,9 @@ private:
-   // Writes a node's volume directly (device nodes via mixer-api, program streams via SPA props) and
-   // optimistically updates local state. Returns true if the local volume changed.
-   bool applyNodeVolume(std::uint32_t id, float volume);
-+  // Writes mute state without publishing an intermediate AudioState. Batch operations call this
-+  // for every member before rebuilding state once.
-+  bool applyNodeMuted(std::uint32_t id, bool muted);
-   // Records a program-stream write so stale SPA_PARAM_Props echoes can be rejected until the daemon
-   // confirms it. Device nodes are authoritative through mixer-api and skip this.
-   void noteVolumeWritten(NodeData& nd, float volume);
+ test('audio_glyphs', audio_glyphs_test)
+ 
++program_output_group_key_test = executable('program_output_group_key_test',
++  sources: files('tests/program_output_group_key_test.cpp'),
++  include_directories: _noctalia_inc,
++)
++
++test('program_output_group_key', program_output_group_key_test)
++
+ math_provider_test = executable('math_provider_test',
+   sources: files(
+     'tests/math_provider_test.cpp',
 diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.cpp
+index b576b8e..072a257 100644
 --- a/src/pipewire/pipewire_service.cpp
 +++ b/src/pipewire/pipewire_service.cpp
-@@ -1658,6 +1658,30 @@ void PipeWireService::rebuildState() {
+@@ -4,6 +4,7 @@
+ #include "core/log.h"
+ #include "ipc/ipc_arg_parse.h"
+ #include "ipc/ipc_service.h"
++#include "pipewire/program_output_group_key.h"
+ #include "pipewire/wireplumber_mixer.h"
+ #include "util/string_utils.h"
+ 
+@@ -311,6 +312,11 @@ namespace {
+     }
+     assignIfBetter(client.appId, std::move(appId));
+ 
++    const std::uint32_t processId = parseUint32Or(dictGet(props, "application.process.id"));
++    if (processId != 0 && client.applicationProcessId != processId) {
++      client.applicationProcessId = processId;
++      changed = true;
++    }
+     assignIfBetter(client.binary, dictGet(props, "application.process.binary"));
+ 
+     std::string iconName = dictGet(props, "application.icon-name");
+@@ -963,6 +969,7 @@ void PipeWireService::onRegistryGlobal(std::uint32_t id, const char* type, std::
+       nd->description = nd->name;
+     }
+     nd->clientId = parseUint32Or(dictGet(props, "client.id"));
++    nd->applicationProcessId = parseUint32Or(dictGet(props, "application.process.id"));
+     nd->deviceId = parseUint32Or(dictGet(props, "device.id"));
+     nd->applicationName = dictGet(props, "application.name");
+     if (nd->applicationName.empty()) {
+@@ -1169,6 +1176,11 @@ void PipeWireService::onNodeInfo(std::uint32_t id, const pw_node_info* info) {
+     if (clientId != 0) {
+       nd.clientId = clientId;
+     }
++    const std::uint32_t processId =
++        parseUint32Or(dictGet(info->props, "application.process.id"), nd.applicationProcessId);
++    if (processId != 0) {
++      nd.applicationProcessId = processId;
++    }
+     const std::uint32_t deviceId = parseUint32Or(dictGet(info->props, "device.id"), nd.deviceId);
+     if (deviceId != 0) {
+       nd.deviceId = deviceId;
+@@ -1494,6 +1506,9 @@ void PipeWireService::refreshNodeIdentity(NodeData& nd) {
+     return;
+   }
+   const ClientData& client = it->second;
++  if (nd.applicationProcessId == 0 && client.applicationProcessId != 0) {
++    nd.applicationProcessId = client.applicationProcessId;
++  }
+   if ((nd.applicationName.empty()
+        || nd.applicationName == "audio-src"
+        || nd.applicationName == "audio-sink"
+@@ -1658,6 +1673,34 @@ void PipeWireService::rebuildState() {
    std::ranges::sort(next.sinks, {}, &AudioNode::id);
    std::ranges::sort(next.sources, {}, &AudioNode::id);
    std::ranges::sort(next.programOutputs, {}, &AudioNode::id);
 +
 +  std::vector<AudioNode> groupedProgramOutputs;
-+  std::unordered_map<std::uint32_t, std::size_t> groupByClient;
++  std::unordered_map<std::uint64_t, std::size_t> groupByIdentity;
 +  groupedProgramOutputs.reserve(next.programOutputs.size());
 +  for (AudioNode& node : next.programOutputs) {
 +    const auto source = m_nodes.find(node.id);
-+    const std::uint32_t clientId =
-+        source != m_nodes.end() && source->second != nullptr ? source->second->clientId : 0;
-+    if (clientId == 0) {
++    const std::uint64_t groupKey = source != m_nodes.end() && source->second != nullptr
++        ? programOutputGroupKey({
++              .processId = source->second->applicationProcessId,
++              .clientId = source->second->clientId,
++          })
++        : 0;
++    if (groupKey == 0) {
 +      groupedProgramOutputs.push_back(std::move(node));
 +      continue;
 +    }
 +
-+    const auto [it, inserted] = groupByClient.emplace(clientId, groupedProgramOutputs.size());
++    const auto [it, inserted] = groupByIdentity.emplace(groupKey, groupedProgramOutputs.size());
 +    if (inserted) {
 +      groupedProgramOutputs.push_back(std::move(node));
 +      continue;
@@ -53,7 +105,7 @@ diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.c
    std::ranges::sort(nextPrivacy.captures, {}, [](const PrivacyCapture& capture) {
      return std::tie(capture.kind, capture.appName, capture.nodeId);
    });
-@@ -1823,6 +1847,27 @@ float PipeWireService::relativeAdjustTarget(
+@@ -1823,6 +1866,32 @@ float PipeWireService::relativeAdjustTarget(
    return m_relativeAdjust.target;
  }
  
@@ -63,14 +115,19 @@ diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.c
 +    return {};
 +  }
 +
-+  const std::uint32_t clientId = selected->second->clientId;
-+  if (clientId == 0) {
++  const std::uint64_t groupKey = programOutputGroupKey({
++      .processId = selected->second->applicationProcessId,
++      .clientId = selected->second->clientId,
++  });
++  if (groupKey == 0) {
 +    return {id};
 +  }
 +
 +  std::vector<std::uint32_t> ids;
 +  for (const auto& [nodeId, node] : m_nodes) {
-+    if (node != nullptr && node->clientId == clientId && isProgramOutputNode(*node)) {
++    if (node != nullptr
++        && programOutputGroupKey({.processId = node->applicationProcessId, .clientId = node->clientId}) == groupKey
++        && isProgramOutputNode(*node)) {
 +      ids.push_back(nodeId);
 +    }
 +  }
@@ -81,7 +138,7 @@ diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.c
  void PipeWireService::setNodeVolume(std::uint32_t id, float volume) {
    auto it = m_nodes.find(id);
    if (it == m_nodes.end()) {
-@@ -1845,15 +1890,15 @@ void PipeWireService::setNodeVolume(std::uint32_t id, float volume) {
+@@ -1845,15 +1914,15 @@ void PipeWireService::setNodeVolume(std::uint32_t id, float volume) {
    }
  }
  
@@ -100,7 +157,7 @@ diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.c
    }
  
    // Device nodes go through WirePlumber's mixer-api to keep pipewire-pulse / pavucontrol in sync. The
-@@ -1865,15 +1910,7 @@ void PipeWireService::setNodeMuted(std::uint32_t id, bool muted) {
+@@ -1865,15 +1934,7 @@ void PipeWireService::setNodeMuted(std::uint32_t id, bool muted) {
      const bool before = nd.muted;
      nd.swMute = muted;
      recomputeEffectiveMute(nd);
@@ -117,7 +174,7 @@ diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.c
    }
  
    // Program streams, and device nodes for immediate local/UI consistency.
-@@ -1920,14 +1957,23 @@ void PipeWireService::setNodeMuted(std::uint32_t id, bool muted) {
+@@ -1920,14 +1981,23 @@ void PipeWireService::setNodeMuted(std::uint32_t id, bool muted) {
      nd.nodeRouteMute = muted;
    }
    recomputeEffectiveMute(nd);
@@ -145,7 +202,7 @@ diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.c
  }
  
  void PipeWireService::setSinkVolume(std::uint32_t id, float volume) {
-@@ -1947,8 +1993,38 @@ void PipeWireService::setSourceVolume(std::uint32_t id, float volume) {
+@@ -1947,8 +2017,38 @@ void PipeWireService::setSourceVolume(std::uint32_t id, float volume) {
  void PipeWireService::setSourceMuted(std::uint32_t id, bool muted) { setNodeMuted(id, muted); }
  void PipeWireService::setDefaultSource(std::uint32_t id) { setDefaultNode(id, "default.audio.source"); }
  
@@ -186,3 +243,90 @@ diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.c
  
  void PipeWireService::setDefaultNode(std::uint32_t id, const char* key) {
    const auto it = m_nodes.find(id);
+diff --git a/src/pipewire/pipewire_service.h b/src/pipewire/pipewire_service.h
+index a9e7401..6bd7bf7 100644
+--- a/src/pipewire/pipewire_service.h
++++ b/src/pipewire/pipewire_service.h
+@@ -141,6 +141,7 @@ public:
+     PipeWireService* service = nullptr;
+     std::uint32_t id = 0;
+     std::uint32_t clientId = 0;
++    std::uint32_t applicationProcessId = 0;
+     std::string name;
+     std::string description;
+     std::string applicationName;
+@@ -177,6 +178,7 @@ public:
+   struct ClientData {
+     PipeWireService* service = nullptr;
+     std::uint32_t id = 0;
++    std::uint32_t applicationProcessId = 0;
+     std::string name;
+     std::string appId;
+     std::string binary;
+@@ -222,6 +224,7 @@ private:
+   void recomputeEffectiveMute(NodeData& nd);
+   void setNodeVolume(std::uint32_t id, float volume);
+   void setNodeMuted(std::uint32_t id, bool muted);
++  [[nodiscard]] std::vector<std::uint32_t> programOutputGroupIds(std::uint32_t id) const;
+ 
+   // Target volume for one relative-adjust event: current + base step for a tap, or a
+   // repeat-rate-independent velocity ramp accumulated on a gesture-local target while held.
+@@ -240,6 +243,9 @@ private:
+   // Writes a node's volume directly (device nodes via mixer-api, program streams via SPA props) and
+   // optimistically updates local state. Returns true if the local volume changed.
+   bool applyNodeVolume(std::uint32_t id, float volume);
++  // Writes mute state without publishing an intermediate AudioState. Batch operations call this
++  // for every member before rebuilding state once.
++  bool applyNodeMuted(std::uint32_t id, bool muted);
+   // Records a program-stream write so stale SPA_PARAM_Props echoes can be rejected until the daemon
+   // confirms it. Device nodes are authoritative through mixer-api and skip this.
+   void noteVolumeWritten(NodeData& nd, float volume);
+diff --git a/src/pipewire/program_output_group_key.h b/src/pipewire/program_output_group_key.h
+new file mode 100644
+index 0000000..2ae89f1
+--- /dev/null
++++ b/src/pipewire/program_output_group_key.h
+@@ -0,0 +1,19 @@
++#pragma once
++
++#include <cstdint>
++
++struct ProgramOutputIdentity {
++  std::uint32_t processId = 0;
++  std::uint32_t clientId = 0;
++};
++
++// Keep process and client identifiers in separate namespaces. Chromium creates short-lived
++// PipeWire clients for one audio-service process, so the process is the stable identity when it is
++// available. Client identity remains a conservative fallback for applications that omit the PID.
++[[nodiscard]] constexpr std::uint64_t programOutputGroupKey(ProgramOutputIdentity identity) noexcept {
++  constexpr std::uint64_t kProcessIdentity = std::uint64_t{1} << 32;
++  if (identity.processId != 0) {
++    return kProcessIdentity | identity.processId;
++  }
++  return identity.clientId;
++}
+diff --git a/tests/program_output_group_key_test.cpp b/tests/program_output_group_key_test.cpp
+new file mode 100644
+index 0000000..d409045
+--- /dev/null
++++ b/tests/program_output_group_key_test.cpp
+@@ -0,0 +1,18 @@
++#include "pipewire/program_output_group_key.h"
++
++#include <cassert>
++
++int main() {
++  const auto chromiumPrimary = programOutputGroupKey({.processId = 4242, .clientId = 10});
++  const auto chromiumTransient = programOutputGroupKey({.processId = 4242, .clientId = 11});
++  assert(chromiumPrimary == chromiumTransient);
++
++  const auto otherElectronApp = programOutputGroupKey({.processId = 4343, .clientId = 10});
++  assert(chromiumPrimary != otherElectronApp);
++
++  const auto legacyPrimary = programOutputGroupKey({.clientId = 20});
++  const auto legacySibling = programOutputGroupKey({.clientId = 20});
++  assert(legacyPrimary != 0);
++  assert(legacyPrimary == legacySibling);
++  assert(programOutputGroupKey({}) == 0);
++}

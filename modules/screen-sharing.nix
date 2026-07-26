@@ -6,6 +6,10 @@ in
 {
   nixpkgs.overlays = [
     (_final: prev: {
+      vesktop = prev.vesktop.overrideAttrs (oldAttrs: {
+        patches = (oldAttrs.patches or [ ]) ++ [ ./patches/vesktop-screen-share-transaction.patch ];
+      });
+
       xdg-desktop-portal-wlr = prev.xdg-desktop-portal-wlr.overrideAttrs (oldAttrs: {
         patches = (oldAttrs.patches or [ ]) ++ [ ./patches/xdpw-window-restore.patch ];
       });

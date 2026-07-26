@@ -1,0 +1,186 @@
+diff --git a/src/main/screenShare.ts b/src/main/screenShare.ts
+index a96b1ce..669b477 100644
+--- a/src/main/screenShare.ts
++++ b/src/main/screenShare.ts
+@@ -10,10 +10,53 @@ import { IpcCommands, IpcEvents } from "shared/IpcEvents";
+ 
+ import { sendRendererCommand } from "./ipcCommands";
+ import { handle } from "./utils/ipcWrappers";
++import { SingleFlight } from "./utils/singleFlight";
+ 
+ const isWayland =
+     process.platform === "linux" && (process.env.XDG_SESSION_TYPE === "wayland" || !!process.env.WAYLAND_DISPLAY);
+ 
++const waylandPicker = new SingleFlight<Streams | null>();
++
++async function pickWaylandStream(): Promise<Streams | null> {
++    const sources = await desktopCapturer
++        .getSources({
++            types: ["window", "screen"],
++            thumbnailSize: {
++                width: 1920,
++                height: 1080
++            }
++        })
++        .catch(err => {
++            console.error("Error during screenshare picker", err);
++            return null;
++        });
++
++    const video = sources?.[0];
++    if (!video) return null;
++
++    const stream = await sendRendererCommand<StreamPick>(IpcCommands.SCREEN_SHARE_PICKER, {
++        screens: [
++            {
++                id: video.id,
++                name: video.name,
++                url: video.thumbnail.toDataURL()
++            }
++        ],
++        skipPicker: true
++    }).catch(() => null);
++
++    return stream === null ? null : { video };
++}
++
++function getWaylandPickerTransaction(): Promise<Streams | null> {
++    return waylandPicker.run(() =>
++        pickWaylandStream().catch(err => {
++            console.error("Error while completing Wayland screenshare picker", err);
++            return null;
++        })
++    );
++}
++
+ export function registerScreenShareHandler() {
+     handle(IpcEvents.CAPTURER_GET_LARGE_THUMBNAIL, async (_, id: string) => {
+         const sources = await desktopCapturer.getSources({
+@@ -27,14 +70,21 @@ export function registerScreenShareHandler() {
+     });
+ 
+     session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+-        // request full resolution on wayland right away because we always only end up with one result anyway
+-        const width = isWayland ? 1920 : 176;
++        // Discord can issue overlapping requests while a Wayland portal selection is still active.
++        // Every waiter must share the complete TUI + Vesktop picker transaction; otherwise a request
++        // carrying restore data can open the Vesktop modal before another request's TUI has finished.
++        if (isWayland) {
++            const streams = await getWaylandPickerTransaction();
++            callback(streams ?? {});
++            return;
++        }
++
+         const sources = await desktopCapturer
+             .getSources({
+                 types: ["window", "screen"],
+                 thumbnailSize: {
+-                    width,
+-                    height: width * (9 / 16)
++                    width: 176,
++                    height: 99
+                 }
+             })
+             .catch(err => console.error("Error during screenshare picker", err));
+@@ -47,21 +97,6 @@ export function registerScreenShareHandler() {
+             url: thumbnail.toDataURL()
+         }));
+ 
+-        if (isWayland) {
+-            const video = data[0];
+-            if (video) {
+-                const stream = await sendRendererCommand<StreamPick>(IpcCommands.SCREEN_SHARE_PICKER, {
+-                    screens: [video],
+-                    skipPicker: true
+-                }).catch(() => null);
+-
+-                if (stream === null) return callback({});
+-            }
+-
+-            callback(video ? { video: sources[0] } : {});
+-            return;
+-        }
+-
+         const choice = await sendRendererCommand<StreamPick>(IpcCommands.SCREEN_SHARE_PICKER, {
+             screens: data,
+             skipPicker: false
+diff --git a/src/main/utils/singleFlight.ts b/src/main/utils/singleFlight.ts
+new file mode 100644
+index 0000000..15bba23
+--- /dev/null
++++ b/src/main/utils/singleFlight.ts
+@@ -0,0 +1,25 @@
++/*
++ * Vesktop, a desktop app aiming to give you a snappier Discord Experience
++ * Copyright (c) 2023 Vendicated and Vencord contributors
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++export class SingleFlight<T> {
++    private active: Promise<T> | null = null;
++
++    run(task: () => Promise<T>): Promise<T> {
++        if (this.active) return this.active;
++
++        const transaction = Promise.resolve().then(task);
++        this.active = transaction;
++        void transaction.then(
++            () => this.clear(transaction),
++            () => this.clear(transaction)
++        );
++        return transaction;
++    }
++
++    private clear(transaction: Promise<T>) {
++        if (this.active === transaction) this.active = null;
++    }
++}
+diff --git a/tests/singleFlight.test.ts b/tests/singleFlight.test.ts
+new file mode 100644
+index 0000000..1e89f0a
+--- /dev/null
++++ b/tests/singleFlight.test.ts
+@@ -0,0 +1,42 @@
++/*
++ * Vesktop, a desktop app aiming to give you a snappier Discord Experience
++ * Copyright (c) 2023 Vendicated and Vencord contributors
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++import assert from "node:assert/strict";
++import test from "node:test";
++
++import { SingleFlight } from "../src/main/utils/singleFlight.ts";
++
++test("coalesces overlapping requests and starts a new transaction after completion", async () => {
++    const singleFlight = new SingleFlight<number>();
++    let starts = 0;
++    let release!: (value: number) => void;
++    const gate = new Promise<number>(resolve => (release = resolve));
++
++    const first = singleFlight.run(() => {
++        starts++;
++        return gate;
++    });
++    const second = singleFlight.run(() => {
++        starts++;
++        return Promise.resolve(2);
++    });
++
++    assert.strictEqual(first, second);
++    assert.strictEqual(starts, 0);
++    release(1);
++    assert.deepEqual(await Promise.all([first, second]), [1, 1]);
++    assert.strictEqual(starts, 1);
++
++    assert.strictEqual(await singleFlight.run(async () => ++starts), 2);
++});
++
++test("clears a rejected transaction", async () => {
++    const singleFlight = new SingleFlight<number>();
++    const failure = new Error("expected");
++
++    await assert.rejects(singleFlight.run(() => Promise.reject(failure)), failure);
++    assert.strictEqual(await singleFlight.run(async () => 7), 7);
++});
+
