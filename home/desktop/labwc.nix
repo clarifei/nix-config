@@ -1,5 +1,5 @@
 let
-  effectsOpacity = 0.95;
+  effectsOpacity = 0.90;
 in
 {
   imports = [ ./labwc-keybinds.nix ];
@@ -40,7 +40,7 @@ in
           # Dual-Kawase blur scales exponentially with the number of passes.
           passes = 2;
           radius = 4;
-          noise = 0;
+          noise = 0.02;
           brightness = 0.9;
           contrast = 0.9;
           saturation = 1.1;
