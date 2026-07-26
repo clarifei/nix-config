@@ -33,6 +33,7 @@ let
           rev = "45c69780fc4fe5b9db0c3a1bac2521360b4538fb";
           hash = "sha256-XcYjecZ0xIoJqib0YAn2PZNXyHLOiG4G6J3xKqknNzs=";
         };
+        patches = (old.patches or [ ]) ++ [ ./patches/scenefx-high-precision-blur.patch ];
         buildInputs = (old.buildInputs or [ ]) ++ [ lcms2 ];
         mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Dexamples=false" ];
       });
@@ -46,7 +47,11 @@ in
     hash = "sha256-1LINOZsdN5btT0VQvUwYXbSjuKdQdbkaI062OYAJSiE=";
   };
 
-  patches = (old.patches or [ ]) ++ [ ./patches/labwc-scenefx.patch ];
+  patches = (old.patches or [ ]) ++ [
+    ./patches/labwc-scenefx-renderer.patch
+    ./patches/labwc-scenefx-window-effects.patch
+    ./patches/labwc-scenefx-window-effects-docs.patch
+  ];
 
   # The public SceneFX renderer header directly includes GLES2 headers.
   buildInputs = (old.buildInputs or [ ]) ++ [

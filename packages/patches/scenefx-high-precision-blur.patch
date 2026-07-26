@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Rendy Sebpian <nightcoremosta@gmail.com>
+Date: Sun, 26 Jul 2026 23:16:48 +0700
+Subject: [PATCH] Use high precision in blur shaders
+
+
+diff --git a/render/fx_renderer/shaders/blur1.frag b/render/fx_renderer/shaders/blur1.frag
+index bb27600..f1fa72d 100644
+--- a/render/fx_renderer/shaders/blur1.frag
++++ b/render/fx_renderer/shaders/blur1.frag
+@@ -1,6 +1,10 @@
++#ifdef GL_FRAGMENT_PRECISION_HIGH
++precision highp float;
++#else
+ precision mediump float;
++#endif
+ 
+-varying mediump vec2 v_texcoord;
++varying vec2 v_texcoord;
+ uniform sampler2D tex;
+ 
+ uniform float radius;
+diff --git a/render/fx_renderer/shaders/blur2.frag b/render/fx_renderer/shaders/blur2.frag
+index 2c947f2..2260e0e 100644
+--- a/render/fx_renderer/shaders/blur2.frag
++++ b/render/fx_renderer/shaders/blur2.frag
+@@ -1,6 +1,10 @@
++#ifdef GL_FRAGMENT_PRECISION_HIGH
++precision highp float;
++#else
+ precision mediump float;
++#endif
+ 
+-varying mediump vec2 v_texcoord;
++varying vec2 v_texcoord;
+ uniform sampler2D tex;
+ 
+ uniform float radius;

@@ -1,123 +1,9 @@
-diff --git a/docs/labwc-config.5.scd b/docs/labwc-config.5.scd
-index 6a16b89..97d4e1b 100644
---- a/docs/labwc-config.5.scd
-+++ b/docs/labwc-config.5.scd
-@@ -679,6 +679,40 @@ extending outward from the snapped edge.
- 	Font weight (normal, thin, ultralight, light, semilight, book, medium,
- 	semibold, bold, ultrabold, heavy, ultraheavy). Default is normal.
- 
-+## WINDOW EFFECTS
-+
-+Window effects apply to the content of regular Wayland and XWayland windows.
-+Layer-shell surfaces, popups, menus, server-side decorations and captured
-+window content are unaffected. Fullscreen windows are always opaque and have
-+blur disabled to preserve direct scanout.
-+
-+*<windowEffects><enabled>* [yes|no]
-+	Enable window opacity and blur. Default is no.
-+
-+*<windowEffects><activeOpacity>*
-+	Opacity of the active window, between 0.0 and 1.0. Default is 1.0.
-+
-+*<windowEffects><inactiveOpacity>*
-+	Opacity of inactive windows, between 0.0 and 1.0. Default is 1.0.
-+
-+*<windowEffects><blur><enabled>* [yes|no]
-+	Blur the scene behind translucent windows. Default is no.
-+
-+*<windowEffects><blur><passes>*
-+	Number of blur passes, between 0 and 10. Default is 3.
-+
-+*<windowEffects><blur><radius>*
-+	Blur radius, between 0 and 10. Default is 5.
-+
-+*<windowEffects><blur><noise>*
-+	Noise applied to the blur, between 0.0 and 1.0. Default is 0.02.
-+
-+*<windowEffects><blur><brightness>*++
-+*<windowEffects><blur><contrast>*++
-+*<windowEffects><blur><saturation>*
-+	Blur color adjustments, each between 0.0 and 2.0. Defaults are 0.9,
-+	0.9 and 1.1, respectively.
-+
- ## MARGIN
- 
- *<margin top="" bottom="" left="" right="" output="" />*
-diff --git a/docs/rc.xml.all b/docs/rc.xml.all
-index 350d2ea..de4dd66 100644
---- a/docs/rc.xml.all
-+++ b/docs/rc.xml.all
-@@ -78,6 +78,21 @@
-     </font>
-   </theme>
- 
-+  <windowEffects>
-+    <enabled>no</enabled>
-+    <activeOpacity>1.0</activeOpacity>
-+    <inactiveOpacity>1.0</inactiveOpacity>
-+    <blur>
-+      <enabled>no</enabled>
-+      <passes>3</passes>
-+      <radius>5</radius>
-+      <noise>0.02</noise>
-+      <brightness>0.9</brightness>
-+      <contrast>0.9</contrast>
-+      <saturation>1.1</saturation>
-+    </blur>
-+  </windowEffects>
-+
-   <windowSwitcher preview="yes" outlines="yes" unshade="yes">
-     <osd show="yes" style="classic" output="all" thumbnailLabelFormat="%T" />
-     <fields>
-diff --git a/include/config/rcxml.h b/include/config/rcxml.h
-index 9c2183a..792a649 100644
---- a/include/config/rcxml.h
-+++ b/include/config/rcxml.h
-@@ -115,6 +115,18 @@ struct rcxml {
- 	bool ssd_keep_border;
- 	bool shadows_enabled;
- 	bool shadows_on_tiled;
-+	struct {
-+		bool enabled;
-+		float active_opacity;
-+		float inactive_opacity;
-+		bool blur_enabled;
-+		int blur_passes;
-+		int blur_radius;
-+		float blur_noise;
-+		float blur_brightness;
-+		float blur_contrast;
-+		float blur_saturation;
-+	} window_effects;
- 	struct font font_activewindow;
- 	struct font font_inactivewindow;
- 	struct font font_menuheader;
-diff --git a/include/view.h b/include/view.h
-index 46943ab..e193713 100644
---- a/include/view.h
-+++ b/include/view.h
-@@ -172,6 +172,10 @@ struct view {
- 	struct wlr_surface *surface;
- 	struct wlr_scene_tree *scene_tree;
- 	struct wlr_scene_tree *content_tree; /* may be NULL for unmapped view */
-+	struct {
-+		struct wlr_scene_blur *blur;
-+		bool activated;
-+	} effects;
- 
- 	/* These are never NULL and an empty string is set instead. */
- 	char *title;
-@@ -478,6 +482,10 @@ void view_toggle_keybinds(struct view *view);
- bool view_inhibits_actions(struct view *view, struct wl_list *actions);
- 
- void view_set_activated(struct view *view, bool activated);
-+void view_effects_create(struct view *view);
-+void view_effects_update(struct view *view);
-+void view_effects_update_all(void);
-+void view_effects_reconfigure(void);
- void view_set_output(struct view *view, struct output *output);
- void view_close(struct view *view);
- 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Rendy Sebpian <nightcoremosta@gmail.com>
+Date: Sun, 26 Jul 2026 23:15:02 +0700
+Subject: [PATCH 1/3] Integrate the SceneFX renderer
+
+
 diff --git a/meson.build b/meson.build
 index d85823c..c323b5b 100644
 --- a/meson.build
@@ -182,66 +68,6 @@ index e9c80bb..4051346 100644
  #include <wlr/util/log.h>
  #include "common/mem.h"
  #include "magnifier.h"
-diff --git a/src/config/rcxml.c b/src/config/rcxml.c
-index ab0639d..e67e314 100644
---- a/src/config/rcxml.c
-+++ b/src/config/rcxml.c
-@@ -1201,6 +1201,38 @@ entry(xmlNode *node, char *nodename, char *content)
- 		set_bool(content, &rc.shadows_enabled);
- 	} else if (!strcasecmp(nodename, "dropShadowsOnTiled.theme")) {
- 		set_bool(content, &rc.shadows_on_tiled);
-+	} else if (!strcasecmp(nodename, "enabled.windowEffects")) {
-+		set_bool(content, &rc.window_effects.enabled);
-+	} else if (!strcasecmp(nodename, "activeOpacity.windowEffects")) {
-+		set_float(content, &rc.window_effects.active_opacity);
-+		rc.window_effects.active_opacity = MAX(0.0f,
-+			MIN(1.0f, rc.window_effects.active_opacity));
-+	} else if (!strcasecmp(nodename, "inactiveOpacity.windowEffects")) {
-+		set_float(content, &rc.window_effects.inactive_opacity);
-+		rc.window_effects.inactive_opacity = MAX(0.0f,
-+			MIN(1.0f, rc.window_effects.inactive_opacity));
-+	} else if (!strcasecmp(nodename, "enabled.blur.windowEffects")) {
-+		set_bool(content, &rc.window_effects.blur_enabled);
-+	} else if (!strcasecmp(nodename, "passes.blur.windowEffects")) {
-+		rc.window_effects.blur_passes = MAX(0, MIN(10, atoi(content)));
-+	} else if (!strcasecmp(nodename, "radius.blur.windowEffects")) {
-+		rc.window_effects.blur_radius = MAX(0, MIN(10, atoi(content)));
-+	} else if (!strcasecmp(nodename, "noise.blur.windowEffects")) {
-+		set_float(content, &rc.window_effects.blur_noise);
-+		rc.window_effects.blur_noise = MAX(0.0f,
-+			MIN(1.0f, rc.window_effects.blur_noise));
-+	} else if (!strcasecmp(nodename, "brightness.blur.windowEffects")) {
-+		set_float(content, &rc.window_effects.blur_brightness);
-+		rc.window_effects.blur_brightness = MAX(0.0f,
-+			MIN(2.0f, rc.window_effects.blur_brightness));
-+	} else if (!strcasecmp(nodename, "contrast.blur.windowEffects")) {
-+		set_float(content, &rc.window_effects.blur_contrast);
-+		rc.window_effects.blur_contrast = MAX(0.0f,
-+			MIN(2.0f, rc.window_effects.blur_contrast));
-+	} else if (!strcasecmp(nodename, "saturation.blur.windowEffects")) {
-+		set_float(content, &rc.window_effects.blur_saturation);
-+		rc.window_effects.blur_saturation = MAX(0.0f,
-+			MIN(2.0f, rc.window_effects.blur_saturation));
- 	} else if (!strcasecmp(nodename, "followMouse.focus")) {
- 		set_bool(content, &rc.focus_follow_mouse);
- 	} else if (!strcasecmp(nodename, "followMouseRequiresMovement.focus")) {
-@@ -1526,6 +1558,16 @@ rcxml_init(void)
- 	rc.corner_radius = 8;
- 	rc.shadows_enabled = false;
- 	rc.shadows_on_tiled = false;
-+	rc.window_effects.enabled = false;
-+	rc.window_effects.active_opacity = 1.0f;
-+	rc.window_effects.inactive_opacity = 1.0f;
-+	rc.window_effects.blur_enabled = false;
-+	rc.window_effects.blur_passes = 3;
-+	rc.window_effects.blur_radius = 5;
-+	rc.window_effects.blur_noise = 0.02f;
-+	rc.window_effects.blur_brightness = 0.9f;
-+	rc.window_effects.blur_contrast = 0.9f;
-+	rc.window_effects.blur_saturation = 1.1f;
- 
- 	rc.gap = 0;
- 	rc.adaptive_sync = LAB_ADAPTIVE_SYNC_DISABLED;
 diff --git a/src/cycle/cycle.c b/src/cycle/cycle.c
 index 0f183dd..e68c027 100644
 --- a/src/cycle/cycle.c
@@ -511,7 +337,7 @@ index 19b4b5a..c7ffd40 100644
  #include "ssd.h"
  
 diff --git a/src/output.c b/src/output.c
-index 2eab8ec..001ed04 100644
+index 2eab8ec..fd27f2c 100644
 --- a/src/output.c
 +++ b/src/output.c
 @@ -22,7 +22,7 @@
@@ -523,14 +349,6 @@ index 2eab8ec..001ed04 100644
  #include <wlr/util/log.h>
  #include "common/macros.h"
  #include "common/mem.h"
-@@ -261,6 +261,7 @@ handle_output_frame(struct wl_listener *listener, void *data)
- 	struct wlr_scene_output *scene_output = output->scene_output;
- 	struct wlr_output_state *pending = &output->pending;
- 
-+	view_effects_update_all();
- 	pending->tearing_page_flip = output_get_tearing_allowance(output);
- 
- 	lab_wlr_scene_output_commit(scene_output, pending);
 diff --git a/src/overlay.c b/src/overlay.c
 index 817bb3f..63d28f8 100644
 --- a/src/overlay.c
@@ -571,7 +389,7 @@ index 95ec896..119b212 100644
  #include "buffer.h"
  #include "common/list.h"
 diff --git a/src/server.c b/src/server.c
-index d0c8c04..e93413c 100644
+index d0c8c04..940e585 100644
 --- a/src/server.c
 +++ b/src/server.c
 @@ -2,6 +2,7 @@
@@ -591,15 +409,7 @@ index d0c8c04..e93413c 100644
  #include <wlr/types/wlr_screencopy_v1.h>
  #include <wlr/types/wlr_security_context_v1.h>
  #include <wlr/types/wlr_single_pixel_buffer_v1.h>
-@@ -111,6 +112,7 @@ reload_config_and_theme(void)
- 	wl_list_for_each(view, &server.views, link) {
- 		view_reload_ssd(view);
- 	}
-+	view_effects_reconfigure();
- 
- 	cycle_finish(/*switch_focus*/ false);
- 	menu_reconfigure();
-@@ -373,7 +375,7 @@ handle_renderer_lost(struct wl_listener *listener, void *data)
+@@ -373,7 +374,7 @@ handle_renderer_lost(struct wl_listener *listener, void *data)
  {
  	wlr_log(WLR_INFO, "Re-creating renderer after GPU reset");
  
@@ -608,7 +418,7 @@ index d0c8c04..e93413c 100644
  	if (!renderer) {
  		wlr_log(WLR_ERROR, "Unable to create renderer");
  		return;
-@@ -527,7 +529,7 @@ server_init(void)
+@@ -527,7 +528,7 @@ server_init(void)
  	 * The renderer is responsible for defining the various pixel formats it
  	 * supports for shared memory, this configures that for clients.
  	 */
@@ -617,14 +427,6 @@ index d0c8c04..e93413c 100644
  	if (!server.renderer) {
  		wlr_log(WLR_ERROR, "unable to create renderer");
  		exit(EXIT_FAILURE);
-@@ -580,6 +582,7 @@ server_init(void)
- 
- 	server.scene = wlr_scene_create();
- 	die_if_null(server.scene);
-+	view_effects_reconfigure();
- 
- 	server.direct_scanout_enabled = server.scene->WLR_PRIVATE.direct_scanout;
- 
 diff --git a/src/session-lock.c b/src/session-lock.c
 index 4e5eb8a..21d3e3d 100644
 --- a/src/session-lock.c
@@ -729,16 +531,15 @@ index e2ab637..4a0d5e6 100644
  #include "common/scene-helpers.h"
  #include "config/rcxml.h"
 diff --git a/src/view.c b/src/view.c
-index 21005f2..8e21642 100644
+index 21005f2..c0c4cc5 100644
 --- a/src/view.c
 +++ b/src/view.c
-@@ -1,11 +1,12 @@
+@@ -1,11 +1,11 @@
  // SPDX-License-Identifier: GPL-2.0-only
  #include "view.h"
  #include <assert.h>
 +#include <scenefx/types/wlr_scene.h>
  #include <strings.h>
-+#include <wlr/types/wlr_alpha_modifier_v1.h>
  #include <wlr/types/wlr_cursor.h>
  #include <wlr/types/wlr_keyboard_group.h>
  #include <wlr/types/wlr_output_layout.h>
@@ -746,129 +547,6 @@ index 21005f2..8e21642 100644
  #include <wlr/types/wlr_security_context_v1.h>
  #include <wlr/types/wlr_xdg_shell.h>
  #include "action.h"
-@@ -459,10 +460,98 @@ view_discover_output(struct view *view, struct wlr_box *geometry)
- 	return false;
- }
- 
-+static void
-+set_window_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
-+{
-+	(void)sx;
-+	(void)sy;
-+	float opacity = *(float *)data;
-+	struct wlr_scene_surface *surface =
-+		wlr_scene_surface_try_from_buffer(buffer);
-+	if (surface) {
-+		const struct wlr_alpha_modifier_surface_v1_state *alpha =
-+			wlr_alpha_modifier_v1_get_surface_state(surface->surface);
-+		if (alpha) {
-+			opacity *= alpha->multiplier;
-+		}
-+	}
-+	wlr_scene_buffer_set_opacity(buffer, opacity);
-+}
-+
-+void
-+view_effects_create(struct view *view)
-+{
-+	assert(view);
-+	assert(view->scene_tree);
-+	assert(!view->effects.blur);
-+
-+	view->effects.blur = wlr_scene_blur_create(view->scene_tree, 0, 0);
-+	die_if_null(view->effects.blur);
-+	wlr_scene_node_lower_to_bottom(&view->effects.blur->node);
-+	view_effects_update(view);
-+}
-+
-+void
-+view_effects_update(struct view *view)
-+{
-+	assert(view);
-+
-+	bool enabled = rc.window_effects.enabled && !view->fullscreen;
-+	float opacity = 1.0f;
-+	if (enabled) {
-+		opacity = view->effects.activated
-+			? rc.window_effects.active_opacity
-+			: rc.window_effects.inactive_opacity;
-+	}
-+	if (view->content_tree) {
-+		wlr_scene_node_for_each_buffer(&view->content_tree->node,
-+			set_window_opacity, &opacity);
-+	}
-+
-+	if (!view->effects.blur) {
-+		return;
-+	}
-+	int height = view_effective_height(view, /* use_pending */ false);
-+	bool blur_enabled = enabled && rc.window_effects.blur_enabled
-+		&& opacity < 1.0f && view->current.width > 0 && height > 0;
-+	wlr_scene_node_set_enabled(&view->effects.blur->node, blur_enabled);
-+	if (blur_enabled) {
-+		wlr_scene_blur_set_size(view->effects.blur,
-+			view->current.width, height);
-+	}
-+}
-+
-+void
-+view_effects_update_all(void)
-+{
-+	struct view *view;
-+	wl_list_for_each(view, &server.views, link) {
-+		view_effects_update(view);
-+	}
-+}
-+
-+void
-+view_effects_reconfigure(void)
-+{
-+	if (!server.scene) {
-+		return;
-+	}
-+	wlr_scene_set_blur_data(server.scene,
-+		rc.window_effects.blur_passes,
-+		rc.window_effects.blur_radius,
-+		rc.window_effects.blur_noise,
-+		rc.window_effects.blur_brightness,
-+		rc.window_effects.blur_contrast,
-+		rc.window_effects.blur_saturation);
-+	view_effects_update_all();
-+}
-+
- void
- view_set_activated(struct view *view, bool activated)
- {
- 	assert(view);
-+	view->effects.activated = activated;
-+	view_effects_update(view);
- 	ssd_set_active(view->ssd, activated);
- 	if (view->impl->set_activated) {
- 		view->impl->set_activated(view, activated);
-@@ -563,6 +652,7 @@ view_moved(struct view *view)
- 	}
- 	view_update_outputs(view);
- 	ssd_update_geometry(view->ssd);
-+	view_effects_update(view);
- 	cursor_update_focus();
- 	if (rc.resize_indicator && server.grabbed_view == view) {
- 		resize_indicator_update(view);
-@@ -1676,6 +1766,7 @@ set_fullscreen(struct view *view, bool fullscreen)
- 	}
- 
- 	view->fullscreen = fullscreen;
-+	view_effects_update(view);
- 	wl_signal_emit_mutable(&view->events.fullscreened, NULL);
- 
- 	/* Re-show decorations when no longer fullscreen */
-@@ -2439,6 +2530,7 @@ view_set_shade(struct view *view, bool shaded)
- 		wlr_scene_node_set_enabled(&view->content_tree->node,
- 			!view->shaded);
- 	}
-+	view_effects_update(view);
- }
- 
- void
 diff --git a/src/workspaces.c b/src/workspaces.c
 index a1ed911..47e8c94 100644
 --- a/src/workspaces.c
@@ -896,7 +574,7 @@ index 7ca9ab0..feee37b 100644
  #include "common/macros.h"
  #include "common/mem.h"
 diff --git a/src/xdg.c b/src/xdg.c
-index ccba0de..4571f02 100644
+index ccba0de..d81c2e0 100644
 --- a/src/xdg.c
 +++ b/src/xdg.c
 @@ -3,7 +3,7 @@
@@ -908,14 +586,6 @@ index ccba0de..4571f02 100644
  #include <wlr/types/wlr_xdg_activation_v1.h>
  #include <wlr/types/wlr_xdg_dialog_v1.h>
  #include <wlr/types/wlr_xdg_shell.h>
-@@ -1041,6 +1041,7 @@ handle_new_xdg_toplevel(struct wl_listener *listener, void *data)
- 	view->scene_tree = lab_wlr_scene_tree_create(
- 		view->workspace->view_trees[VIEW_LAYER_NORMAL]);
- 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
-+	view_effects_create(view);
- 
- 	struct wlr_scene_tree *tree = wlr_scene_xdg_surface_create(
- 		view->scene_tree, xdg_surface);
 diff --git a/src/xwayland-unmanaged.c b/src/xwayland-unmanaged.c
 index 89d40e8..917f6db 100644
 --- a/src/xwayland-unmanaged.c
@@ -930,7 +600,7 @@ index 89d40e8..917f6db 100644
  #include <wlr/xwayland.h>
  #include "common/list.h"
 diff --git a/src/xwayland.c b/src/xwayland.c
-index 5838d41..4742b0b 100644
+index 5838d41..a9f2ef6 100644
 --- a/src/xwayland.c
 +++ b/src/xwayland.c
 @@ -5,7 +5,7 @@
@@ -942,11 +612,3 @@ index 5838d41..4742b0b 100644
  #include <wlr/types/wlr_seat.h>
  #include <wlr/types/wlr_xcursor_manager.h>
  #include <wlr/xwayland.h>
-@@ -1007,6 +1007,7 @@ xwayland_view_create(struct wlr_xwayland_surface *xsurface, bool mapped)
- 	view->scene_tree = lab_wlr_scene_tree_create(
- 		view->workspace->view_trees[VIEW_LAYER_NORMAL]);
- 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
-+	view_effects_create(view);
- 	node_descriptor_create(&view->scene_tree->node,
- 		LAB_NODE_VIEW, view, /*data*/ NULL);
- 
