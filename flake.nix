@@ -80,6 +80,21 @@
             touch "$out"
           '';
 
+          vesktop-wayland-picker-runtime =
+            let
+              vesktop =
+                (pkgs.vesktop.override { electron_42 = pkgs.electron_41; }).overrideAttrs (oldAttrs: {
+                  patches = (oldAttrs.patches or [ ]) ++ [
+                    ./modules/patches/vesktop-screen-share-transaction.patch
+                    ./modules/patches/vesktop-square-splash.patch
+                  ];
+                });
+            in
+            pkgs.runCommand "vesktop-wayland-picker-runtime-test" { } ''
+              grep -Fq '${pkgs.electron_41}/bin/electron' ${vesktop}/bin/vesktop
+              touch "$out"
+            '';
+
           xdpw-restore-data-gate = pkgs.runCommand "xdpw-restore-data-gate-test" {
             nativeBuildInputs = [
               pkgs.gnugrep

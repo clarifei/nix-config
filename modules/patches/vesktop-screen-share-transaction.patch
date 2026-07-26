@@ -63,8 +63,8 @@ index a96b1ce..669b477 100644
 -        // request full resolution on wayland right away because we always only end up with one result anyway
 -        const width = isWayland ? 1920 : 176;
 +        // Discord can issue overlapping requests while a Wayland portal selection is still active.
-+        // Every waiter must share the complete TUI + Vesktop picker transaction; otherwise a request
-+        // carrying restore data can open the Vesktop modal before another request's TUI has finished.
++        // Every waiter must share the complete portal + Vesktop picker transaction so another request
++        // cannot open a second chooser or modal while the first transaction is still active.
 +        if (isWayland) {
 +            const streams = await getWaylandPickerTransaction();
 +            callback(streams ?? {});
@@ -183,4 +183,3 @@ index 0000000..1e89f0a
 +    await assert.rejects(singleFlight.run(() => Promise.reject(failure)), failure);
 +    assert.strictEqual(await singleFlight.run(async () => 7), 7);
 +});
-
