@@ -200,6 +200,7 @@ in
             "gtk4"
           ];
           community_ids = [
+            "discord"
             "pywalfox-beta4"
             "yazi"
             "zathura"
