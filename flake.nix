@@ -34,6 +34,10 @@
       ...
     }:
     {
+      checks.x86_64-linux.xdpw-foot-chooser =
+        nixpkgs.legacyPackages.x86_64-linux.callPackage ./tests/xdpw-foot-chooser.nix
+          { };
+
       nixosConfigurations.nixos = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         specialArgs = {

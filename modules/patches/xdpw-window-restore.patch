@@ -1,0 +1,158 @@
+diff --git a/include/screencast_common.h b/include/screencast_common.h
+--- a/include/screencast_common.h
++++ b/include/screencast_common.h
+@@ -149,6 +149,7 @@ struct xdpw_screencast_target {
+ struct xdpw_screencast_restore_data {
+ 	uint32_t version;
+ 	const char *output_name;
++	const char *window_identifier;
+ };
+ 
+ struct xdpw_format_modifier_pair {
+diff --git a/include/wlr_screencast.h b/include/wlr_screencast.h
+--- a/include/wlr_screencast.h
++++ b/include/wlr_screencast.h
+@@ -22,7 +22,7 @@ int xdpw_wlr_screencopy_init(struct xdpw_state *state);
+ 
+ bool xdpw_wlr_target_chooser(struct xdpw_screencast_context *ctx, struct xdpw_screencast_target *target, uint32_t type_mask);
+ bool xdpw_wlr_target_from_data(struct xdpw_screencast_context *ctx, struct xdpw_screencast_target *target,
+-		struct xdpw_screencast_restore_data *data);
++		struct xdpw_screencast_restore_data *data, uint32_t type_mask);
+ 
+ void xdpw_wlr_frame_capture(struct xdpw_screencast_instance *cast);
+ int xdpw_wlr_session_init(struct xdpw_screencast_instance *cast);
+diff --git a/src/screencast/screencast.c b/src/screencast/screencast.c
+--- a/src/screencast/screencast.c
++++ b/src/screencast/screencast.c
+@@ -160,7 +160,7 @@ bool setup_target(struct xdpw_screencast_context *ctx, struct xdpw_session *sess,
+ 	}
+ 	target->with_cursor = sess->screencast_data.cursor_mode == EMBEDDED;
+ 	if (data) {
+-		target_initialized = xdpw_wlr_target_from_data(ctx, target, data);
++		target_initialized = xdpw_wlr_target_from_data(ctx, target, data, type_mask);
+ 	}
+ 	if (!target_initialized) {
+ 		target_initialized = xdpw_wlr_target_chooser(ctx, target, type_mask);
+@@ -437,6 +437,10 @@ static int method_screencast_select_sources(sd_bus_message *msg, void *data,
+ 					if (strcmp(rdKey, "output_name") == 0) {
+ 						sd_bus_message_read(msg, "v", "s", &restore_data.output_name);
+ 						logprint(INFO, "dbus: option restore_data.output_name: %s", restore_data.output_name);
++					} else if (strcmp(rdKey, "window_identifier") == 0) {
++						sd_bus_message_read(msg, "v", "s", &restore_data.window_identifier);
++						logprint(INFO, "dbus: option restore_data.window_identifier: %s",
++							restore_data.window_identifier);
+ 					} else {
+ 						logprint(WARN, "dbus: unknown option %s", rdKey);
+ 						sd_bus_message_skip(msg, "v");
+@@ -583,6 +587,7 @@
+ 		if (strcmp(sess->session_handle, session_handle) == 0) {
+ 				logprint(DEBUG, "dbus: start: found matching session %s", sess->session_handle);
+ 				cast = sess->screencast_data.screencast_instance;
++				break;
+ 		}
+ 	}
+ 	if (!cast) {
+@@ -688,13 +693,21 @@ static int method_screencast_start(sd_bus_message *msg, void *data,
+ 	if (ret < 0) {
+ 		return ret;
+ 	}
+-	if (sess->screencast_data.persist_mode != PERSIST_NONE && cast->target->output) {
+-		struct xdpw_screencast_restore_data restore_data;
+-		restore_data.output_name = cast->target->output->name;
++	if (sess->screencast_data.persist_mode != PERSIST_NONE &&
++			(cast->target->output || cast->target->toplevel)) {
++		const char *restore_key;
++		const char *restore_value;
++		if (cast->target->type == MONITOR) {
++			restore_key = "output_name";
++			restore_value = cast->target->output->name;
++		} else {
++			restore_key = "window_identifier";
++			restore_value = cast->target->toplevel->identifier;
++		}
+ 		ret = sd_bus_message_append(reply, "{sv}",
+ 			"restore_data", "(suv)",
+ 			"wlroots", XDP_CAST_DATA_VER,
+-			"a{sv}", 1, "output_name", "s", restore_data.output_name);
++			"a{sv}", 1, restore_key, "s", restore_value);
+ 		if (ret < 0) {
+ 			return ret;
+ 		}
+diff --git a/src/screencast/chooser.c b/src/screencast/chooser.c
+--- a/src/screencast/chooser.c
++++ b/src/screencast/chooser.c
+@@ -127,6 +127,24 @@
+ 	}
+ }
+ 
++static bool dmenu_label_matches_toplevel(const char *label, const char *identifier) {
++	static const char prefix[] = "Window: ";
++	const size_t label_len = strlen(label);
++	const size_t identifier_len = strlen(identifier);
++	const size_t prefix_len = sizeof(prefix) - 1;
++
++	if (strncmp(label, prefix, prefix_len) != 0 ||
++			label_len < prefix_len + identifier_len + 3) {
++		return false;
++	}
++
++	const size_t identifier_offset = label_len - identifier_len - 1;
++	return label[identifier_offset - 2] == ' ' &&
++		label[identifier_offset - 1] == '(' &&
++		label[label_len - 1] == ')' &&
++		memcmp(label + identifier_offset, identifier, identifier_len) == 0;
++}
++
+ static bool wlr_chooser(const struct xdpw_chooser *chooser,
+ 		struct xdpw_screencast_context *ctx, struct xdpw_screencast_target *target,
+ 		uint32_t type_mask) {
+@@ -201,6 +219,9 @@
+ 		char *label = get_toplevel_label(toplevel, chooser->type);
+ 		found = strcmp(selected_label, label) == 0;
+ 		free(label);
++		if (!found && chooser->type == XDPW_CHOOSER_DMENU) {
++			found = dmenu_label_matches_toplevel(selected_label, toplevel->identifier);
++		}
+ 		if (found) {
+ 			target->type = WINDOW;
+ 			target->toplevel = toplevel;
+diff --git a/src/screencast/wlr_screencast.c b/src/screencast/wlr_screencast.c
+--- a/src/screencast/wlr_screencast.c
++++ b/src/screencast/wlr_screencast.c
+@@ -172,16 +172,28 @@ struct xdpw_wlr_output *xdpw_wlr_output_find_by_name(struct wl_list *output_list, const char *name) {
+ }
+ 
+ bool xdpw_wlr_target_from_data(struct xdpw_screencast_context *ctx, struct xdpw_screencast_target *target,
+-		struct xdpw_screencast_restore_data *data) {
+-	struct xdpw_wlr_output *out = NULL;
+-	out = xdpw_wlr_output_find_by_name(&ctx->output_list, data->output_name);
++		struct xdpw_screencast_restore_data *data, uint32_t type_mask) {
++	if ((type_mask & MONITOR) && data->output_name) {
++		struct xdpw_wlr_output *out = xdpw_wlr_output_find_by_name(&ctx->output_list, data->output_name);
++		if (out) {
++			target->type = MONITOR;
++			target->output = out;
++			return true;
++		}
++	}
+ 
+-	if (!out) {
+-		return false;
++	if ((type_mask & WINDOW) && data->window_identifier) {
++		struct xdpw_toplevel *toplevel;
++		wl_list_for_each(toplevel, &ctx->toplevels, link) {
++			if (toplevel->identifier && strcmp(toplevel->identifier, data->window_identifier) == 0) {
++				target->type = WINDOW;
++				target->toplevel = toplevel;
++				return true;
++			}
++		}
+ 	}
+-	target->type = MONITOR;
+-	target->output = out;
+-	return true;
++
++	return false;
+ }
+ 
+ static void wlr_remove_output(struct xdpw_wlr_output *out) {

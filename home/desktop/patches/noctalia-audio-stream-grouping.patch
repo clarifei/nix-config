@@ -1,0 +1,188 @@
+diff --git a/src/pipewire/pipewire_service.h b/src/pipewire/pipewire_service.h
+--- a/src/pipewire/pipewire_service.h
++++ b/src/pipewire/pipewire_service.h
+@@ -222,6 +222,7 @@ private:
+   void recomputeEffectiveMute(NodeData& nd);
+   void setNodeVolume(std::uint32_t id, float volume);
+   void setNodeMuted(std::uint32_t id, bool muted);
++  [[nodiscard]] std::vector<std::uint32_t> programOutputGroupIds(std::uint32_t id) const;
+ 
+   // Target volume for one relative-adjust event: current + base step for a tap, or a
+   // repeat-rate-independent velocity ramp accumulated on a gesture-local target while held.
+@@ -240,6 +241,9 @@ private:
+   // Writes a node's volume directly (device nodes via mixer-api, program streams via SPA props) and
+   // optimistically updates local state. Returns true if the local volume changed.
+   bool applyNodeVolume(std::uint32_t id, float volume);
++  // Writes mute state without publishing an intermediate AudioState. Batch operations call this
++  // for every member before rebuilding state once.
++  bool applyNodeMuted(std::uint32_t id, bool muted);
+   // Records a program-stream write so stale SPA_PARAM_Props echoes can be rejected until the daemon
+   // confirms it. Device nodes are authoritative through mixer-api and skip this.
+   void noteVolumeWritten(NodeData& nd, float volume);
+diff --git a/src/pipewire/pipewire_service.cpp b/src/pipewire/pipewire_service.cpp
+--- a/src/pipewire/pipewire_service.cpp
++++ b/src/pipewire/pipewire_service.cpp
+@@ -1658,6 +1658,30 @@ void PipeWireService::rebuildState() {
+   std::ranges::sort(next.sinks, {}, &AudioNode::id);
+   std::ranges::sort(next.sources, {}, &AudioNode::id);
+   std::ranges::sort(next.programOutputs, {}, &AudioNode::id);
++
++  std::vector<AudioNode> groupedProgramOutputs;
++  std::unordered_map<std::uint32_t, std::size_t> groupByClient;
++  groupedProgramOutputs.reserve(next.programOutputs.size());
++  for (AudioNode& node : next.programOutputs) {
++    const auto source = m_nodes.find(node.id);
++    const std::uint32_t clientId =
++        source != m_nodes.end() && source->second != nullptr ? source->second->clientId : 0;
++    if (clientId == 0) {
++      groupedProgramOutputs.push_back(std::move(node));
++      continue;
++    }
++
++    const auto [it, inserted] = groupByClient.emplace(clientId, groupedProgramOutputs.size());
++    if (inserted) {
++      groupedProgramOutputs.push_back(std::move(node));
++      continue;
++    }
++
++    AudioNode& canonical = groupedProgramOutputs[it->second];
++    canonical.muted = canonical.muted && node.muted;
++  }
++  next.programOutputs = std::move(groupedProgramOutputs);
++
+   std::ranges::sort(nextPrivacy.captures, {}, [](const PrivacyCapture& capture) {
+     return std::tie(capture.kind, capture.appName, capture.nodeId);
+   });
+@@ -1823,6 +1847,27 @@ float PipeWireService::relativeAdjustTarget(
+   return m_relativeAdjust.target;
+ }
+ 
++std::vector<std::uint32_t> PipeWireService::programOutputGroupIds(std::uint32_t id) const {
++  const auto selected = m_nodes.find(id);
++  if (selected == m_nodes.end() || selected->second == nullptr || !isProgramOutputNode(*selected->second)) {
++    return {};
++  }
++
++  const std::uint32_t clientId = selected->second->clientId;
++  if (clientId == 0) {
++    return {id};
++  }
++
++  std::vector<std::uint32_t> ids;
++  for (const auto& [nodeId, node] : m_nodes) {
++    if (node != nullptr && node->clientId == clientId && isProgramOutputNode(*node)) {
++      ids.push_back(nodeId);
++    }
++  }
++  std::ranges::sort(ids);
++  return ids;
++}
++
+ void PipeWireService::setNodeVolume(std::uint32_t id, float volume) {
+   auto it = m_nodes.find(id);
+   if (it == m_nodes.end()) {
+@@ -1845,15 +1890,15 @@ void PipeWireService::setNodeVolume(std::uint32_t id, float volume) {
+   }
+ }
+ 
+-void PipeWireService::setNodeMuted(std::uint32_t id, bool muted) {
++bool PipeWireService::applyNodeMuted(std::uint32_t id, bool muted) {
+   auto it = m_nodes.find(id);
+   if (it == m_nodes.end()) {
+-    return;
++    return false;
+   }
+ 
+   auto& nd = *it->second;
+   if (nd.proxy == nullptr) {
+-    return;
++    return false;
+   }
+ 
+   // Device nodes go through WirePlumber's mixer-api to keep pipewire-pulse / pavucontrol in sync. The
+@@ -1865,15 +1910,7 @@ void PipeWireService::setNodeMuted(std::uint32_t id, bool muted) {
+     const bool before = nd.muted;
+     nd.swMute = muted;
+     recomputeEffectiveMute(nd);
+-    if (before != nd.muted) {
+-      if (id == m_state.defaultSinkId && m_state.defaultSinkId != 0) {
+-        emitVolumePreview(false, id, nd.volume);
+-      } else if (id == m_state.defaultSourceId && m_state.defaultSourceId != 0) {
+-        emitVolumePreview(true, id, nd.volume);
+-      }
+-      rebuildState();
+-    }
+-    return;
++    return before != nd.muted;
+   }
+ 
+   // Program streams, and device nodes for immediate local/UI consistency.
+@@ -1920,14 +1957,23 @@ void PipeWireService::setNodeMuted(std::uint32_t id, bool muted) {
+     nd.nodeRouteMute = muted;
+   }
+   recomputeEffectiveMute(nd);
+-  if (before != nd.muted) {
++  return before != nd.muted;
++}
++
++void PipeWireService::setNodeMuted(std::uint32_t id, bool muted) {
++  if (!applyNodeMuted(id, muted)) {
++    return;
++  }
++
++  const auto it = m_nodes.find(id);
++  if (it != m_nodes.end()) {
+     if (id == m_state.defaultSinkId && m_state.defaultSinkId != 0) {
+-      emitVolumePreview(false, id, nd.volume);
++      emitVolumePreview(false, id, it->second->volume);
+     } else if (id == m_state.defaultSourceId && m_state.defaultSourceId != 0) {
+-      emitVolumePreview(true, id, nd.volume);
++      emitVolumePreview(true, id, it->second->volume);
+     }
+-    rebuildState();
+   }
++  rebuildState();
+ }
+ 
+ void PipeWireService::setSinkVolume(std::uint32_t id, float volume) {
+@@ -1947,8 +1993,38 @@ void PipeWireService::setSourceVolume(std::uint32_t id, float volume) {
+ void PipeWireService::setSourceMuted(std::uint32_t id, bool muted) { setNodeMuted(id, muted); }
+ void PipeWireService::setDefaultSource(std::uint32_t id) { setDefaultNode(id, "default.audio.source"); }
+ 
+-void PipeWireService::setProgramOutputVolume(std::uint32_t id, float volume) { setNodeVolume(id, volume); }
+-void PipeWireService::setProgramOutputMuted(std::uint32_t id, bool muted) { setNodeMuted(id, muted); }
++void PipeWireService::setProgramOutputVolume(std::uint32_t id, float volume) {
++  const float clamped = std::clamp(volume, 0.0f, 1.5f);
++  bool changed = false;
++  for (const std::uint32_t nodeId : programOutputGroupIds(id)) {
++    const auto it = m_nodes.find(nodeId);
++    if (it == m_nodes.end() || it->second == nullptr) {
++      continue;
++    }
++    const std::string& appBinary = it->second->applicationBinary;
++    if (!appBinary.empty()) {
++      m_userAppVolumes[appBinary] = clamped;
++    }
++    if (applyNodeVolume(nodeId, clamped)) {
++      changed = true;
++    }
++  }
++  if (changed) {
++    rebuildState();
++  }
++}
++
++void PipeWireService::setProgramOutputMuted(std::uint32_t id, bool muted) {
++  bool changed = false;
++  for (const std::uint32_t nodeId : programOutputGroupIds(id)) {
++    if (applyNodeMuted(nodeId, muted)) {
++      changed = true;
++    }
++  }
++  if (changed) {
++    rebuildState();
++  }
++}
+ 
+ void PipeWireService::setDefaultNode(std::uint32_t id, const char* key) {
+   const auto it = m_nodes.find(id);

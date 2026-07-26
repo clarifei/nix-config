@@ -13,7 +13,7 @@ let
   noctaliaPatched = noctalia.packages.${pkgs.stdenv.hostPlatform.system}.default.overrideAttrs (old: {
     patches = (old.patches or [ ]) ++ [
       ./patches/noctalia-smart-autohide-labwc.patch
-      ./patches/noctalia-audio-stream-settle.patch
+      ./patches/noctalia-audio-stream-grouping.patch
     ];
   });
 
