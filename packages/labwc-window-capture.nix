@@ -52,6 +52,7 @@ in
     ./patches/labwc-scenefx-window-effects.patch
     ./patches/labwc-scenefx-background-effects.patch
     ./patches/labwc-scenefx-window-effects-docs.patch
+    ./patches/labwc-tui-window-switcher.patch
   ];
 
   # The public SceneFX renderer header directly includes GLES2 headers.

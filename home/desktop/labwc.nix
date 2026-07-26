@@ -51,15 +51,36 @@ in
         "@unshade" = "no";
         osd."@show" = "no";
       };
-      windowRules.windowRule = {
-        "@identifier" = "*";
-        "@serverDecoration" = "yes";
-        action = {
-          "@name" = "SetDecorations";
-          "@decorations" = "border";
-          "@forceSSD" = "yes";
-        };
-      };
+      windowRules.windowRule = [
+        {
+          "@identifier" = "*";
+          "@serverDecoration" = "yes";
+          action = {
+            "@name" = "SetDecorations";
+            "@decorations" = "border";
+            "@forceSSD" = "yes";
+          };
+        }
+        {
+          "@identifier" = "labwc-window-switcher";
+          "@serverDecoration" = "yes";
+          "@skipTaskbar" = "yes";
+          "@skipWindowSwitcher" = "yes";
+          "@fixedPosition" = "yes";
+          action = [
+            {
+              "@name" = "SetDecorations";
+              "@decorations" = "none";
+              "@forceSSD" = "yes";
+            }
+            { "@name" = "ToggleAlwaysOnTop"; }
+            {
+              "@name" = "AutoPlace";
+              "@policy" = "center";
+            }
+          ];
+        }
+      ];
 
       # omit default bindings to keep wallpaper clicks unbound
       mouse.context = [

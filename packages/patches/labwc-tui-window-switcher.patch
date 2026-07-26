@@ -1,0 +1,246 @@
+diff --git a/include/input/keyboard.h b/include/input/keyboard.h
+index 6836d9b..f1f13b8 100644
+--- a/include/input/keyboard.h
++++ b/include/input/keyboard.h
+@@ -25,6 +25,8 @@ struct keyboard {
+ };
+ 
+ void keyboard_reset_current_keybind(void);
++void keyboard_reset_modifiers_release_command(void);
++void keyboard_execute_on_modifiers_release(const char *command);
+ void keyboard_configure(struct seat *seat, struct wlr_keyboard *kb,
+ 	bool is_virtual);
+ 
+diff --git a/src/action.c b/src/action.c
+index ccf5e81..76cd6e9 100644
+--- a/src/action.c
++++ b/src/action.c
+@@ -2,9 +2,13 @@
+ #define _POSIX_C_SOURCE 200809L
+ #include "action.h"
+ #include <assert.h>
++#include <fcntl.h>
++#include <inttypes.h>
+ #include <signal.h>
++#include <stdio.h>
+ #include <string.h>
+ #include <strings.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ #include <wlr/types/wlr_cursor.h>
+ #include <scenefx/types/wlr_scene.h>
+@@ -76,6 +80,8 @@ struct action_arg_list {
+ 	X(KILL, "Kill") \
+ 	X(DEBUG, "Debug") \
+ 	X(EXECUTE, "Execute") \
++	X(EXECUTE_ON_MODIFIER_RELEASE, "ExecuteOnModifierRelease") \
++	X(EXPORT_WINDOW_LIST, "ExportWindowList") \
+ 	X(EXIT, "Exit") \
+ 	X(MOVE_TO_EDGE, "MoveToEdge") \
+ 	X(TOGGLE_SNAP_TO_EDGE, "ToggleSnapToEdge") \
+@@ -299,6 +305,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
+ 
+ 	switch (action->type) {
+ 	case ACTION_TYPE_EXECUTE:
++	case ACTION_TYPE_EXECUTE_ON_MODIFIER_RELEASE:
+ 		/*
+ 		 * <action name="Execute"> with an <execute> child is
+ 		 * deprecated, but we support it anyway for backward
+@@ -632,6 +639,7 @@ action_is_valid(struct action *action)
+ 
+ 	switch (action->type) {
+ 	case ACTION_TYPE_EXECUTE:
++	case ACTION_TYPE_EXECUTE_ON_MODIFIER_RELEASE:
+ 		arg_name = "command";
+ 		break;
+ 	case ACTION_TYPE_MOVE_TO_EDGE:
+@@ -1055,6 +1063,97 @@ warp_cursor(struct view *view, const char *to, const char *x, const char *y)
+ 	cursor_update_focus();
+ }
+ 
++static void
++export_window_list(void)
++{
++	const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
++	if (!runtime_dir || runtime_dir[0] != '/') {
++		wlr_log(WLR_ERROR,
++			"Cannot export window list without an absolute XDG_RUNTIME_DIR");
++		return;
++	}
++
++	struct buf path = BUF_INIT;
++	struct buf temporary_path = BUF_INIT;
++	buf_add_fmt(&path, "%s/labwc-window-switcher-windows", runtime_dir);
++	buf_add_fmt(&temporary_path, "%s.tmp", path.data);
++
++	int fd = open(temporary_path.data,
++		O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
++	if (fd < 0) {
++		wlr_log_errno(WLR_ERROR, "Failed to open window-list export");
++		goto cleanup;
++	}
++	if (fchmod(fd, 0600) < 0) {
++		wlr_log_errno(WLR_ERROR, "Failed to secure window-list export");
++		close(fd);
++		goto unlink_temporary;
++	}
++
++	FILE *stream = fdopen(fd, "w");
++	if (!stream) {
++		wlr_log_errno(WLR_ERROR, "Failed to create window-list stream");
++		close(fd);
++		goto unlink_temporary;
++	}
++
++	bool success = true;
++	enum lab_view_criteria criteria =
++		LAB_VIEW_CRITERIA_NO_SKIP_WINDOW_SWITCHER
++		| LAB_VIEW_CRITERIA_NO_DIALOG;
++	struct view *view;
++	for_each_view(view, &server.views, criteria) {
++
++		char id[32];
++		snprintf(id, sizeof(id), "%" PRIu64, view->creation_id);
++		const char *active = view == server.active_view ? "1" : "0";
++		const char *workspace = view->visible_on_all_workspaces
++			? "*"
++			: view->workspace->name;
++		const char *fields[] = {
++			id, active, workspace, view->app_id, view->title
++		};
++
++		for (size_t i = 0; i < ARRAY_SIZE(fields); ++i) {
++			size_t len = strlen(fields[i]);
++			if (fwrite(fields[i], 1, len, stream) != len
++					|| fputc('\0', stream) == EOF) {
++				success = false;
++				break;
++			}
++		}
++		if (!success) {
++			break;
++		}
++	}
++
++	if (success && fflush(stream) < 0) {
++		success = false;
++	}
++	if (success && fsync(fd) < 0) {
++		success = false;
++	}
++	if (fclose(stream) < 0) {
++		success = false;
++	}
++
++	if (!success) {
++		wlr_log_errno(WLR_ERROR, "Failed to write window-list export");
++		goto unlink_temporary;
++	}
++	if (rename(temporary_path.data, path.data) < 0) {
++		wlr_log_errno(WLR_ERROR, "Failed to publish window-list export");
++		goto unlink_temporary;
++	}
++	goto cleanup;
++
++unlink_temporary:
++	unlink(temporary_path.data);
++cleanup:
++	buf_reset(&temporary_path);
++	buf_reset(&path);
++}
++
+ static void
+ run_action(struct view *view, struct action *action,
+ 	struct cursor_context *ctx)
+@@ -1088,6 +1187,13 @@ run_action(struct view *view, struct action *action,
+ 		buf_reset(&cmd);
+ 		break;
+ 	}
++	case ACTION_TYPE_EXECUTE_ON_MODIFIER_RELEASE:
++		keyboard_execute_on_modifiers_release(
++			action_get_str(action, "command", NULL));
++		break;
++	case ACTION_TYPE_EXPORT_WINDOW_LIST:
++		export_window_list();
++		break;
+ 	case ACTION_TYPE_EXIT:
+ 		wl_display_terminate(server.wl_display);
+ 		break;
+diff --git a/src/input/keyboard.c b/src/input/keyboard.c
+index 3688414..8c0a6f5 100644
+--- a/src/input/keyboard.c
++++ b/src/input/keyboard.c
+@@ -9,6 +9,8 @@
+ #include <wlr/types/wlr_seat.h>
+ #include "action.h"
+ #include "common/macros.h"
++#include "common/mem.h"
++#include "common/spawn.h"
+ #include "config/keybind.h"
+ #include "config/rcxml.h"
+ #include "cycle.h"
+@@ -47,6 +49,7 @@ struct keyinfo {
+ static bool should_cancel_cycling_on_next_key_release;
+ 
+ static struct keybind *cur_keybind;
++static char *modifiers_release_command;
+ 
+ /* Called on --reconfigure to prevent segfault when handling release keybinds */
+ void
+@@ -55,6 +58,18 @@ keyboard_reset_current_keybind(void)
+ 	cur_keybind = NULL;
+ }
+ 
++void
++keyboard_reset_modifiers_release_command(void)
++{
++	zfree(modifiers_release_command);
++}
++
++void
++keyboard_execute_on_modifiers_release(const char *command)
++{
++	xstrdup_replace(modifiers_release_command, command);
++}
++
+ static void
+ change_vt(unsigned int vt)
+ {
+@@ -149,9 +164,10 @@ handle_modifiers(struct wl_listener *listener, void *data)
+ 	}
+ 
+ 	bool cycling = server.input_mode == LAB_INPUT_STATE_CYCLE;
++	uint32_t modifiers = keyboard_get_all_modifiers(seat);
+ 
+ 	if ((cycling || seat->workspace_osd_shown_by_modifier)
+-			&& !keyboard_get_all_modifiers(seat)) {
++			&& !modifiers) {
+ 		if (cycling) {
+ 			if (key_state_nr_bound_keys()) {
+ 				should_cancel_cycling_on_next_key_release = true;
+@@ -165,6 +181,13 @@ handle_modifiers(struct wl_listener *listener, void *data)
+ 		}
+ 	}
+ 
++	if (modifiers_release_command && !modifiers) {
++		char *command = modifiers_release_command;
++		modifiers_release_command = NULL;
++		spawn_async_no_shell(command);
++		free(command);
++	}
++
+ 	if (!input_method_keyboard_grab_forward_modifiers(keyboard)) {
+ 		/* Send modifiers to focused client */
+ 		wlr_seat_keyboard_notify_modifiers(seat->wlr_seat,
+diff --git a/src/seat.c b/src/seat.c
+index fe85dc2..67eb4f3 100644
+--- a/src/seat.c
++++ b/src/seat.c
+@@ -753,6 +753,7 @@ seat_reconfigure(void)
+ 	cursor_reload(seat);
+ 	overlay_finish(seat);
+ 	keyboard_reset_current_keybind();
++	keyboard_reset_modifiers_release_command();
+ 	wl_list_for_each(input, &seat->inputs, link) {
+ 		switch (input->wlr_input_device->type) {
+ 		case WLR_INPUT_DEVICE_KEYBOARD:

@@ -9,6 +9,14 @@ let
   action = name: attrs: { "@name" = name; } // attrs;
   execute = command: action "Execute" { "@command" = command; };
   windowSwitcher = pkgs.callPackage ../../packages/labwc-window-switcher.nix { };
+  controlWindowSwitcher = mode: execute "${lib.getExe windowSwitcher} ${mode}";
+  openWindowSwitcher = mode: [
+    (action "ExportWindowList" { })
+    (controlWindowSwitcher mode)
+    (action "ExecuteOnModifierRelease" {
+      "@command" = "${lib.getExe windowSwitcher} accept";
+    })
+  ];
   goToDesktop = desktop: action "GoToDesktop" { "@to" = toString desktop; };
   sendToDesktop =
     desktop:
@@ -67,19 +75,19 @@ in
       }
       {
         "@key" = "A-Tab";
-        action = execute (lib.getExe windowSwitcher);
+        action = openWindowSwitcher "next";
       }
       {
         "@key" = "A-S-Tab";
-        action = execute (lib.getExe windowSwitcher);
+        action = openWindowSwitcher "previous";
       }
       {
         "@key" = "W-Tab";
-        action = execute (lib.getExe windowSwitcher);
+        action = openWindowSwitcher "next";
       }
       {
         "@key" = "W-S-Tab";
-        action = execute (lib.getExe windowSwitcher);
+        action = openWindowSwitcher "previous";
       }
       {
         "@key" = "W-d";
