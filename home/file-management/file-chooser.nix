@@ -204,14 +204,25 @@ let
   };
 in
 {
-  xdg.configFile."xdg-desktop-portal-termfilechooser/config".text = ''
-    [filechooser]
-    cmd=${lib.getExe yaziWrapper}
-    create_help_file=1
-    default_dir=$HOME
-    open_mode=suggested
-    save_mode=suggested
-  '';
+  xdg.configFile."xdg-desktop-portal-termfilechooser/config" = {
+    text = ''
+      [filechooser]
+      cmd=${lib.getExe yaziWrapper}
+      create_help_file=1
+      default_dir=$HOME
+      open_mode=suggested
+      save_mode=suggested
+    '';
+
+    onChange = ''
+      runtime_dir="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+      if [[ -S $runtime_dir/bus ]]; then
+        env XDG_RUNTIME_DIR="$runtime_dir" \
+          ${pkgs.systemd}/bin/systemctl --user try-restart \
+            xdg-desktop-portal-termfilechooser.service || true
+      fi
+    '';
+  };
 
   programs.firefox.policies.Preferences."widget.use-xdg-desktop-portal.file-picker" = {
     Value = 1;
