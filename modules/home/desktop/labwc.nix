@@ -1,7 +1,7 @@
 let
   effectsOpacity = 0.90;
   grainAmount = 0.08;
-  grainSize = 0.4;
+  grainSize = 1.0;
 in
 {
   imports = [ ./labwc-keybinds.nix ];
