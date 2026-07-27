@@ -1,0 +1,28 @@
+name: Nix
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: nix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flake-check:
+    name: Validate flake
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: DeterminateSystems/determinate-nix-action@v3.21.8
+      - name: Check flake
+        run: nix flake check --all-systems --no-write-lock-file --print-build-logs
+      - name: Build NixOS configuration
+        run: nix build .#nixosConfigurations.nixos.config.system.build.toplevel --no-link --print-build-logs
