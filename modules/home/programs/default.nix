@@ -39,6 +39,7 @@ in
     nodejs
     pnpm
     ripgrep
+    uv
     vesktop
     wayland-utils
     wlrctl
