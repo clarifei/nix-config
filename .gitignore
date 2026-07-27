@@ -1,6 +1,7 @@
 # nix build outputs
 /result
 /result-*
+graphify-out/
 
 # local environment
 /.direnv/

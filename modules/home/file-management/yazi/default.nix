@@ -43,11 +43,26 @@ in
             desc = "open document";
           }
         ];
+        browser = [
+          {
+            run = "xdg-open %s";
+            orphan = true;
+            desc = "open in browser";
+          }
+        ];
       };
       open.prepend_rules = [
         {
           url = "*/";
           use = "folder";
+        }
+        {
+          url = "*.{html,htm}";
+          use = "browser";
+        }
+        {
+          mime = "text/html";
+          use = "browser";
         }
         {
           url = "*.{${documentExtensions}}";
