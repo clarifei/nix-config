@@ -18,12 +18,18 @@ in
     jq
     nodejs_latest
     pnpm
+    python3
     ripgrep
     uv
     vesktop
     wayland-utils
     wlrctl
   ]);
+
+  home.sessionVariables = {
+    UV_NO_MANAGED_PYTHON = "1";
+    UV_PYTHON_DOWNLOADS = "never";
+  };
 
   # allow generated configs to replace stale home manager backups
   xdg.configFile = {
