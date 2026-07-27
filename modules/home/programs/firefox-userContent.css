@@ -1,0 +1,15 @@
+/* Square Firefox's built-in content pages without affecting websites. */
+
+@-moz-document url-prefix("about:") {
+  :root {
+    --in-content-border-radius: 0px !important;
+    --in-content-button-border-radius: 0px !important;
+    --in-content-item-border-radius: 0px !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    border-radius: 0px !important;
+  }
+}

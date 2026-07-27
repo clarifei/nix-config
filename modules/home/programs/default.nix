@@ -67,7 +67,16 @@ in
       };
     };
     gh.enable = true;
-    firefox.enable = true;
+    firefox = {
+      enable = true;
+      profiles.default = {
+        # This is the existing default Firefox profile, not a new profile.
+        path = "29azi75l.default";
+        settings."toolkit.legacyUserProfileCustomizations.stylesheets" = true;
+        userChrome = ./firefox-userChrome.css;
+        userContent = ./firefox-userContent.css;
+      };
+    };
     fish = {
       enable = true;
       functions.fish_greeting = "";
