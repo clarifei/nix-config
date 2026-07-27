@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ lib, pkgs, ... }:
 
 {
   # keep bwrap in the system path for sandboxed tools
@@ -29,7 +29,12 @@
     };
   };
 
-  nixpkgs.config.allowUnfree = true;
+  nixpkgs.config.allowUnfreePredicate =
+    pkg:
+    builtins.elem (lib.getName pkg) [
+      "codex"
+      "nvidia-x11"
+    ];
 
   programs.nh = {
     enable = true;

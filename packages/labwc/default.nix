@@ -24,30 +24,28 @@ let
 
   # SceneFX needs to use the exact wlroots ABI used by Labwc. This commit is
   # the first 0.5.x revision synchronized with wlroots 0.20.2.
-  scenefx_0_5 =
-    (scenefx.override { wlroots_0_19 = wlroots; }).overrideAttrs
-      (old: {
-        version = "0.5.0-unstable-2026-07-13";
-        src = fetchFromGitHub {
-          owner = "wlrfx";
-          repo = "scenefx";
-          rev = "45c69780fc4fe5b9db0c3a1bac2521360b4538fb";
-          hash = "sha256-XcYjecZ0xIoJqib0YAn2PZNXyHLOiG4G6J3xKqknNzs=";
-        };
-        patches = (old.patches or [ ]) ++ [
-          ./patches/scenefx-high-precision-blur.patch
-          ./patches/scenefx-fused-blur-color.patch
-          ./patches/scenefx-scene-tree-opacity.patch
-          ./patches/scenefx-static-grain.patch
-        ];
-        buildInputs = (old.buildInputs or [ ]) ++ [ lcms2 ];
-        nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ glslang ];
-        postPatch = (old.postPatch or "") + ''
-          glslangValidator -S frag render/fx_renderer/shaders/blur1.frag
-          glslangValidator -S frag render/fx_renderer/shaders/blur2.frag
-        '';
-        mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Dexamples=false" ];
-      });
+  scenefx_0_5 = (scenefx.override { wlroots_0_19 = wlroots; }).overrideAttrs (old: {
+    version = "0.5.0-unstable-2026-07-13";
+    src = fetchFromGitHub {
+      owner = "wlrfx";
+      repo = "scenefx";
+      rev = "45c69780fc4fe5b9db0c3a1bac2521360b4538fb";
+      hash = "sha256-XcYjecZ0xIoJqib0YAn2PZNXyHLOiG4G6J3xKqknNzs=";
+    };
+    patches = (old.patches or [ ]) ++ [
+      ./patches/scenefx-high-precision-blur.patch
+      ./patches/scenefx-fused-blur-color.patch
+      ./patches/scenefx-scene-tree-opacity.patch
+      ./patches/scenefx-static-grain.patch
+    ];
+    buildInputs = (old.buildInputs or [ ]) ++ [ lcms2 ];
+    nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ glslang ];
+    postPatch = (old.postPatch or "") + ''
+      glslangValidator -S frag render/fx_renderer/shaders/blur1.frag
+      glslangValidator -S frag render/fx_renderer/shaders/blur2.frag
+    '';
+    mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Dexamples=false" ];
+  });
 in
 (labwc.override { wlroots_0_19 = wlroots; }).overrideAttrs (old: {
   version = "0.20.1";

@@ -5,13 +5,10 @@
   ...
 }:
 
-let
-  labwc = pkgs.callPackage ../../packages/labwc { };
-in
 {
   programs.labwc = {
     enable = true;
-    package = labwc;
+    package = pkgs.labwc;
   };
 
   services.greetd = {

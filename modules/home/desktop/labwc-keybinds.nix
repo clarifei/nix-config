@@ -8,7 +8,7 @@
 let
   action = name: attrs: { "@name" = name; } // attrs;
   execute = command: action "Execute" { "@command" = command; };
-  windowSwitcher = pkgs.callPackage ../../../packages/labwc-window-switcher { };
+  windowSwitcher = pkgs.labwc-window-switcher;
   controlWindowSwitcher = mode: execute "${lib.getExe windowSwitcher} ${mode}";
   openWindowSwitcher = mode: [
     (action "ExportWindowList" { })

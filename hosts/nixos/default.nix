@@ -8,6 +8,7 @@
     ../../modules/nixos/labwc.nix
     ../../modules/nixos/nix.nix
     ../../modules/nixos/noctalia.nix
+    ../../modules/nixos/overlays.nix
     ../../modules/nixos/screen-sharing.nix
     ../../modules/nixos/swap.nix
     ../../modules/nixos/system.nix

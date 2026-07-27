@@ -21,5 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: DeterminateSystems/determinate-nix-action@v3.21.8
-      - name: Evaluate flake
-        run: nix flake check --all-systems --no-build --no-write-lock-file
+      - name: Check formatting
+        run: nix fmt -- --ci
+      - name: Build flake checks
+        run: nix flake check --all-systems --no-write-lock-file

@@ -6,31 +6,13 @@
 }:
 
 let
-  codexBinary = "codex-x86_64-unknown-linux-musl";
-  codexVersion = "0.145.0";
-  codex = pkgs.stdenvNoCC.mkDerivation {
-    pname = "codex";
-    version = codexVersion;
-
-    src = pkgs.fetchurl {
-      url = "https://github.com/openai/codex/releases/download/rust-v${codexVersion}/${codexBinary}.tar.gz";
-      hash = "sha256-v68Tybo08q12TkqRbEnPcXeuujKc8PcZ4iJ1ZvyNZio=";
-    };
-
-    dontBuild = true;
-    dontConfigure = true;
-    dontUnpack = true;
-
-    installPhase = ''
-      install -d $out/bin
-      tar -xzf $src -O ${codexBinary} > $out/bin/codex
-      chmod 755 $out/bin/codex
-    '';
-  };
+  codex = pkgs.callPackage ../../../packages/codex { };
+  nineRouter = pkgs.callPackage ../../../packages/9router { };
 in
 {
   home.packages = [
     codex
+    nineRouter
   ]
   ++ (with pkgs; [
     fd
