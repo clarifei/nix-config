@@ -8,7 +8,7 @@ diff --git a/docs/labwc-config.5.scd b/docs/labwc-config.5.scd
 index e272106..3630586 100644
 --- a/docs/labwc-config.5.scd
 +++ b/docs/labwc-config.5.scd
-@@ -722,6 +722,17 @@ surfaces participate in compositor opacity and blur.
+@@ -722,6 +722,18 @@ surfaces participate in compositor opacity and blur.
  	Blur color adjustments, each between 0.0 and 2.0. Defaults are 0.9,
  	0.9 and 1.1, respectively.
  
@@ -17,11 +17,12 @@ index e272106..3630586 100644
 +
 +*<windowEffects><blur><grain><amount>*
 +	Maximum luminance variation of the grain, between 0.0 and 1.0. Default
-+	is 0.04.
++	is 0.08.
 +
 +*<windowEffects><blur><grain><size>*
-+	Grain cell size in output pixels, between 1.0 and 4.0. Default is 1.0.
-+	The pattern remains static when damaged regions are redrawn.
++	Grain texture scale in output pixels, between 1.0 and 8.0. Default is
++	1.25. Bilinear filtering keeps larger grains smooth and isotropic. The
++	pattern remains static when damaged regions are redrawn.
 +
  ## MARGIN
  
@@ -36,8 +37,8 @@ index 45e9cc6..4caa2cb 100644
        <saturation>1.1</saturation>
 +      <grain>
 +        <enabled>no</enabled>
-+        <amount>0.04</amount>
-+        <size>1.0</size>
++        <amount>0.08</amount>
++        <size>1.25</size>
 +      </grain>
      </blur>
    </windowEffects>
@@ -73,7 +74,7 @@ index fd2ec0a..953a5c9 100644
 +	} else if (!strcasecmp(nodename, "size.grain.blur.windowEffects")) {
 +		set_float(content, &rc.window_effects.blur_grain_size);
 +		rc.window_effects.blur_grain_size = MAX(1.0f,
-+			MIN(4.0f, rc.window_effects.blur_grain_size));
++			MIN(8.0f, rc.window_effects.blur_grain_size));
  	} else if (!strcasecmp(nodename, "enabled.layerShell.windowEffects")) {
  		set_bool(content, &rc.window_effects.layer_shell.enabled);
  	} else if (!strcasecmp(nodename, "opacity.layerShell.windowEffects")) {
@@ -82,8 +83,8 @@ index fd2ec0a..953a5c9 100644
  	rc.window_effects.blur_contrast = 0.9f;
  	rc.window_effects.blur_saturation = 1.1f;
 +	rc.window_effects.blur_grain_enabled = false;
-+	rc.window_effects.blur_grain_amount = 0.04f;
-+	rc.window_effects.blur_grain_size = 1.0f;
++	rc.window_effects.blur_grain_amount = 0.08f;
++	rc.window_effects.blur_grain_size = 1.25f;
  	rc.window_effects.layer_shell.enabled = false;
  	rc.window_effects.layer_shell.opacity = 1.0f;
  

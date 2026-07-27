@@ -1,20 +1,51 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-Subject: [PATCH] Add static grain to the final blur upsample
+Subject: [PATCH] Add texture-backed static grain after blur
 
-Apply deterministic luminance grain after the final Dual-Kawase upsample and
-color adjustments. The pattern is anchored to framebuffer pixels, so partial
-damage redraws reproduce the same grain without animation or extra texture
-samples.
+Generate a deterministic 1024x1024 grain lookup once per renderer and sample
+it with the same bilinear/repeat approach used by production compositor and
+post-processing implementations. This avoids float-hash precision artifacts
+and the quantized cells that produced repeating vertical patterns at larger
+grain sizes.
 
+Apply one grain lookup after the final Dual-Kawase upsample and color
+adjustments. The pattern is anchored to framebuffer pixels, so partial damage
+redraws remain static and deterministic. The existing Dual-Kawase kernels are
+left intact because their 8-tap weights match SceneFX, Hyprland, KWin, and the
+FrostKiwi reference implementation.
+
+diff --git a/include/render/fx_renderer/fx_renderer.h b/include/render/fx_renderer/fx_renderer.h
+index 69bc9e4..c36644e 100644
+--- a/include/render/fx_renderer/fx_renderer.h
++++ b/include/render/fx_renderer/fx_renderer.h
+@@ -15,6 +15,8 @@
+ #include "render/fx_renderer/shaders.h"
+ #include "render/tracy.h"
+ 
++#define FX_GRAIN_TEXTURE_SIZE 1024
++
+ struct fx_framebuffer;
+ 
+ struct fx_pixel_format {
+@@ -204,6 +206,8 @@ struct fx_renderer {
+ 		struct blur_shader blur2;
+ 	} shaders;
+ 
++	GLuint grain_texture;
++
+ 	struct wl_list buffers; // fx_framebuffer.link
+ 	struct wl_list textures; // fx_texture.link
+ 	struct wl_list offscreen_buffers; // fx_offscreen_buffers.link
 diff --git a/include/render/fx_renderer/shaders.h b/include/render/fx_renderer/shaders.h
-index 85d0f55..94c1f85 100644
+index 85d0f55..d435b7c 100644
 --- a/include/render/fx_renderer/shaders.h
 +++ b/include/render/fx_renderer/shaders.h
-@@ -161,6 +161,9 @@ struct blur_shader {
+@@ -161,6 +161,11 @@ struct blur_shader {
  	GLint brightness;
  	GLint contrast;
  	GLint saturation;
 +	GLint apply_grain;
++	GLint grain_tex;
++	GLint grain_texel_size;
 +	GLint grain_amount;
 +	GLint grain_size;
  };
@@ -58,10 +89,18 @@ index b54c36b..73473c9 100644
  void wlr_scene_set_blur_num_passes(struct wlr_scene *scene, int num_passes);
  
 diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
-index d398510..45c345d 100644
+index d398510..0ef4999 100644
 --- a/render/fx_renderer/fx_pass.c
 +++ b/render/fx_renderer/fx_pass.c
-@@ -902,6 +902,13 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
+@@ -838,6 +838,7 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
+ 	struct wlr_render_texture_options *options = &tex_options->base;
+ 	struct fx_renderer *renderer = pass->buffer->renderer;
+ 	struct blur_data *blur_data = fx_options->blur_data;
++	bool grain_bound = false;
+ 
+ 	TRACY_BOTH_ZONES_START(renderer);
+ 	push_fx_debug(renderer);
+@@ -902,6 +903,21 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
  			glUniform1f(shader->contrast, blur_data->contrast);
  			glUniform1f(shader->saturation, blur_data->saturation);
  		}
@@ -69,54 +108,195 @@ index d398510..45c345d 100644
 +			&& blur_data_has_grain(blur_data);
 +		glUniform1i(shader->apply_grain, apply_grain);
 +		if (apply_grain) {
++			glActiveTexture(GL_TEXTURE1);
++			glBindTexture(GL_TEXTURE_2D, renderer->grain_texture);
++			grain_bound = true;
++			glUniform1i(shader->grain_tex, 1);
++			glUniform2f(shader->grain_texel_size,
++				1.0f / FX_GRAIN_TEXTURE_SIZE,
++				1.0f / FX_GRAIN_TEXTURE_SIZE);
 +			glUniform1f(shader->grain_amount, blur_data->grain_amount);
 +			glUniform1f(shader->grain_size, blur_data->grain_size);
++			glActiveTexture(GL_TEXTURE0);
 +		}
  	}
  
  	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
+@@ -910,6 +926,11 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
+ 	render(&dst_box, options->clip, shader->pos_attrib);
+ 
+ 	glBindTexture(texture->target, 0);
++	if (grain_bound) {
++		glActiveTexture(GL_TEXTURE1);
++		glBindTexture(GL_TEXTURE_2D, 0);
++		glActiveTexture(GL_TEXTURE0);
++	}
+ 	pop_fx_debug(renderer);
+ 	TRACY_BOTH_ZONES_END;
+ 
+diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
+index df9b940..36771a2 100644
+--- a/render/fx_renderer/fx_renderer.c
++++ b/render/fx_renderer/fx_renderer.c
+@@ -6,6 +6,7 @@
+ #include <assert.h>
+ #include <drm_fourcc.h>
+ #include <GLES2/gl2.h>
++#include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <unistd.h>
+@@ -31,6 +32,70 @@
+ static const struct wlr_renderer_impl renderer_impl;
+ static const struct wlr_render_timer_impl render_timer_impl;
+ 
++// PCG-XSH-RR, based on pcg32_random_r from pcg-c-basic (Apache-2.0).
++struct pcg32_state {
++	uint64_t state;
++	uint64_t increment;
++};
++
++static uint32_t pcg32(struct pcg32_state *rng) {
++	uint64_t old_state = rng->state;
++	rng->state = old_state * 6364136223846793005ULL + rng->increment;
++	uint32_t xorshifted = (uint32_t)(((old_state >> 18u) ^ old_state) >> 27u);
++	uint32_t rotation = (uint32_t)(old_state >> 59u);
++	return (xorshifted >> rotation) |
++		(xorshifted << ((-rotation) & 31));
++}
++
++static bool init_grain_texture(struct fx_renderer *renderer) {
++	size_t pixel_count =
++		(size_t)FX_GRAIN_TEXTURE_SIZE * FX_GRAIN_TEXTURE_SIZE;
++	uint8_t *pixels = malloc(pixel_count * 4);
++	if (!pixels) {
++		wlr_log(WLR_ERROR, "Failed to allocate static grain texture");
++		return false;
++	}
++
++	struct pcg32_state rng = {
++		.state = 0x853c49e6748fea9bULL,
++		.increment = 0xda3e39cb94b95bdbULL,
++	};
++	for (size_t i = 0; i < pixel_count; ++i) {
++		uint16_t a = pcg32(&rng) >> 24;
++		uint16_t b = pcg32(&rng) >> 24;
++		uint8_t value = (a + b + 1) / 2;
++		pixels[i * 4 + 0] = value;
++		pixels[i * 4 + 1] = value;
++		pixels[i * 4 + 2] = value;
++		pixels[i * 4 + 3] = 255;
++	}
++
++	for (int i = 0; i < 8 && glGetError() != GL_NO_ERROR; ++i) {
++		// Drain the finite GL error queue before checking the upload.
++	}
++	glActiveTexture(GL_TEXTURE0);
++	glGenTextures(1, &renderer->grain_texture);
++	glBindTexture(GL_TEXTURE_2D, renderer->grain_texture);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
++	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
++	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, FX_GRAIN_TEXTURE_SIZE,
++		FX_GRAIN_TEXTURE_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
++	glBindTexture(GL_TEXTURE_2D, 0);
++	free(pixels);
++
++	GLenum error = glGetError();
++	if (renderer->grain_texture == 0 || error != GL_NO_ERROR) {
++		wlr_log(WLR_ERROR, "Failed to create static grain texture (GL error 0x%x)",
++			error);
++		glDeleteTextures(1, &renderer->grain_texture);
++		renderer->grain_texture = 0;
++		return false;
++	}
++	return true;
++}
++
+ bool wlr_renderer_is_fx(struct wlr_renderer *wlr_renderer) {
+ 	return wlr_renderer->impl == &renderer_impl;
+ }
+@@ -100,6 +165,13 @@ static inline void free_shaders(struct fx_renderer *renderer) {
+ 	pop_fx_debug(renderer);
+ }
+ 
++static void free_grain_texture(struct fx_renderer *renderer) {
++	if (renderer->grain_texture != 0) {
++		glDeleteTextures(1, &renderer->grain_texture);
++		renderer->grain_texture = 0;
++	}
++}
++
+ static void fx_renderer_destroy(struct wlr_renderer *wlr_renderer) {
+ 	struct fx_renderer *renderer = fx_get_renderer(wlr_renderer);
+ 
+@@ -122,6 +194,7 @@ static void fx_renderer_destroy(struct wlr_renderer *wlr_renderer) {
+ 		fx_framebuffer_destroy(buffer);
+ 	}
+ 
++	free_grain_texture(renderer);
+ 	free_shaders(renderer);
+ 
+ 	if (renderer->exts.KHR_debug) {
+@@ -569,6 +642,9 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
+ 	TRACY_FN(
+ 		renderer->tracy_data = TRACY_GPU_CONTEXT_NEW(renderer);
+ 	)
++	if (!init_grain_texture(renderer)) {
++		goto error;
++	}
+ 
+ 	// Link all shaders
+ 	if (!link_shaders(renderer)) {
+@@ -594,6 +670,7 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
+ 
+ error:
+ 	pop_fx_debug(renderer);
++	free_grain_texture(renderer);
+ 
+ 	if (renderer->exts.KHR_debug) {
+ 		glDisable(GL_DEBUG_OUTPUT_KHR);
 diff --git a/render/fx_renderer/shaders.c b/render/fx_renderer/shaders.c
-index 374cc10..dab372e 100644
+index 374cc10..1788954 100644
 --- a/render/fx_renderer/shaders.c
 +++ b/render/fx_renderer/shaders.c
-@@ -342,6 +342,9 @@ bool link_blur2_program(struct blur_shader *shader) {
+@@ -342,6 +342,11 @@ bool link_blur2_program(struct blur_shader *shader) {
  	shader->brightness = glGetUniformLocation(prog, "brightness");
  	shader->contrast = glGetUniformLocation(prog, "contrast");
  	shader->saturation = glGetUniformLocation(prog, "saturation");
 +	shader->apply_grain = glGetUniformLocation(prog, "apply_grain");
++	shader->grain_tex = glGetUniformLocation(prog, "grain_tex");
++	shader->grain_texel_size = glGetUniformLocation(prog, "grain_texel_size");
 +	shader->grain_amount = glGetUniformLocation(prog, "grain_amount");
 +	shader->grain_size = glGetUniformLocation(prog, "grain_size");
  
  	return true;
  }
 diff --git a/render/fx_renderer/shaders/blur2.frag b/render/fx_renderer/shaders/blur2.frag
-index 38cf5eb..56cdb3e 100644
+index 38cf5eb..02f704b 100644
 --- a/render/fx_renderer/shaders/blur2.frag
 +++ b/render/fx_renderer/shaders/blur2.frag
-@@ -13,6 +13,15 @@ uniform bool apply_color_adjustments;
+@@ -13,6 +13,11 @@ uniform bool apply_color_adjustments;
  uniform float brightness;
  uniform float contrast;
  uniform float saturation;
 +uniform bool apply_grain;
++uniform sampler2D grain_tex;
++uniform vec2 grain_texel_size;
 +uniform float grain_amount;
 +uniform float grain_size;
-+
-+float hash12(vec2 position) {
-+	vec3 p3 = fract(vec3(position.xyx) * 0.1031);
-+	p3 += dot(p3, p3.yzx + 33.33);
-+	return fract((p3.x + p3.y) * p3.z);
-+}
  
  mat4 brightnessMatrix() {
  	float b = brightness - 1.0;
-@@ -62,5 +71,12 @@ void main() {
+@@ -62,5 +67,12 @@ void main() {
  		// Keep the same matrix order as the former post-processing pass.
  		color = brightnessMatrix() * contrastMatrix() * saturationMatrix() * color;
  	}
 +	if (apply_grain) {
-+		vec2 grain_coord = floor(gl_FragCoord.xy / max(grain_size, 1.0));
-+		float noise = hash12(grain_coord)
-+			+ hash12(grain_coord + vec2(19.19, 73.17)) - 1.0;
++		vec2 grain_uv = gl_FragCoord.xy * grain_texel_size /
++			max(grain_size, 1.0);
++		float noise = texture2D(grain_tex, grain_uv).r * 2.0 - 1.0;
 +		float delta = noise * grain_amount * color.a;
 +		color.rgb = clamp(color.rgb + vec3(delta), vec3(0.0), vec3(color.a));
 +	}
@@ -179,3 +359,5 @@ index dc68a5d..41dac30 100644
  void wlr_scene_set_blur_num_passes(struct wlr_scene *scene, int num_passes) {
  	struct blur_data *buff_data = &scene->blur_data;
  	if (buff_data->num_passes == num_passes) {
+-- 
+2.54.0

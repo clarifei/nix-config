@@ -43,6 +43,7 @@ let
         buildInputs = (old.buildInputs or [ ]) ++ [ lcms2 ];
         nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ glslang ];
         postPatch = (old.postPatch or "") + ''
+          glslangValidator -S frag render/fx_renderer/shaders/blur1.frag
           glslangValidator -S frag render/fx_renderer/shaders/blur2.frag
         '';
         mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Dexamples=false" ];
