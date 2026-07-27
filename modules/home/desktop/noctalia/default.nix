@@ -96,7 +96,10 @@ in
         position = "bottom";
         radius = 0;
         reserve_space = false;
-        start = [ "workspaces" ];
+        start = [
+          "workspaces"
+          "tray"
+        ];
       };
 
       lockscreen_widgets = {
@@ -132,6 +135,8 @@ in
       };
 
       notification.position = "bottom_right";
+
+      location.address = "Cakung Barat";
 
       plugins.auto_update = false;
 
