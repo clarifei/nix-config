@@ -1,0 +1,201 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Add static grain to the final blur upsample
+
+Apply the offset-sampling grain effect in the final Dual-Kawase upsample.
+This follows the supplied ShaderToy approach without an animation timer or
+additional render pass: it mixes the final blur with one spatially offset
+sample of the blur source. The damage region includes that maximum offset so
+partial redraws cannot leave stale edges.
+
+diff --git a/include/render/fx_renderer/shaders.h b/include/render/fx_renderer/shaders.h
+index 85d0f55..0e12c3f 100644
+--- a/include/render/fx_renderer/shaders.h
++++ b/include/render/fx_renderer/shaders.h
+@@ -161,6 +161,9 @@ struct blur_shader {
+ 	GLint brightness;
+ 	GLint contrast;
+ 	GLint saturation;
++	GLint apply_grain;
++	GLint grain_amount;
++	GLint grain_scale;
+ };
+ 
+ bool link_blur1_program(struct blur_shader *shader);
+diff --git a/include/scenefx/types/fx/blur_data.h b/include/scenefx/types/fx/blur_data.h
+index 8258bd3..fec3169 100644
+--- a/include/scenefx/types/fx/blur_data.h
++++ b/include/scenefx/types/fx/blur_data.h
+@@ -7,6 +7,8 @@
+ struct blur_data {
+ 	int num_passes;
+ 	float radius;
++	float grain_amount;
++	float grain_scale;
+ 	float brightness;
+ 	float contrast;
+ 	float saturation;
+@@ -18,8 +20,12 @@ bool is_scene_blur_enabled(struct blur_data *blur_data);
+ 
+ bool blur_data_should_parameters_blur_effects(struct blur_data *blur_data);
+ 
++bool blur_data_has_grain(const struct blur_data *blur_data);
++
+ int blur_data_calc_size(struct blur_data *blur_data);
+ 
++int blur_data_calc_sample_size(struct blur_data *blur_data);
++
+ struct blur_data blur_data_apply_strength(struct blur_data *blur_data, float strength);
+
+ #endif
+diff --git a/include/scenefx/types/wlr_scene.h b/include/scenefx/types/wlr_scene.h
+index b54c36b..347c343 100644
+--- a/include/scenefx/types/wlr_scene.h
++++ b/include/scenefx/types/wlr_scene.h
+@@ -415,6 +415,10 @@ struct wlr_scene *wlr_scene_create(void);
+ void wlr_scene_set_blur_data(struct wlr_scene *scene, int num_passes,
+ 	int radius, float brightness, float contrast, float saturation);
+ 
++// Sets the global static blur grain parameters.
++void wlr_scene_set_blur_grain(struct wlr_scene *scene, float amount,
++	float scale);
++
+ // Sets the global blur num_passes parameter
+ void wlr_scene_set_blur_num_passes(struct wlr_scene *scene, int num_passes);
+ 
+diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
+index d398510..fa71c99 100644
+--- a/render/fx_renderer/fx_pass.c
++++ b/render/fx_renderer/fx_pass.c
+@@ -902,6 +902,13 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
+ 			glUniform1f(shader->contrast, blur_data->contrast);
+ 			glUniform1f(shader->saturation, blur_data->saturation);
+ 		}
++		bool apply_grain = apply_color_adjustments
++			&& blur_data_has_grain(blur_data);
++		glUniform1i(shader->apply_grain, apply_grain);
++		if (apply_grain) {
++			glUniform1f(shader->grain_amount, blur_data->grain_amount);
++			glUniform1f(shader->grain_scale, blur_data->grain_scale);
++		}
+ 	}
+ 
+ 	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
+@@ -954 +961 @@
+-	wlr_region_expand(&damage, &damage, blur_data_calc_size(&blur_data));
++	wlr_region_expand(&damage, &damage, blur_data_calc_sample_size(&blur_data));
+diff --git a/render/fx_renderer/shaders.c b/render/fx_renderer/shaders.c
+index 374cc10..89ec1d5 100644
+--- a/render/fx_renderer/shaders.c
++++ b/render/fx_renderer/shaders.c
+@@ -342,6 +342,9 @@ bool link_blur2_program(struct blur_shader *shader) {
+ 	shader->brightness = glGetUniformLocation(prog, "brightness");
+ 	shader->contrast = glGetUniformLocation(prog, "contrast");
+ 	shader->saturation = glGetUniformLocation(prog, "saturation");
++	shader->apply_grain = glGetUniformLocation(prog, "apply_grain");
++	shader->grain_amount = glGetUniformLocation(prog, "grain_amount");
++	shader->grain_scale = glGetUniformLocation(prog, "grain_scale");
+ 
+ 	return true;
+ }
+diff --git a/render/fx_renderer/shaders/blur2.frag b/render/fx_renderer/shaders/blur2.frag
+index 38cf5eb..296d5e8 100644
+--- a/render/fx_renderer/shaders/blur2.frag
++++ b/render/fx_renderer/shaders/blur2.frag
+@@ -13,6 +13,13 @@ uniform bool apply_color_adjustments;
+ uniform float brightness;
+ uniform float contrast;
+ uniform float saturation;
++uniform bool apply_grain;
++uniform float grain_amount;
++uniform float grain_scale;
++
++float rand(vec2 uv) {
++	return fract(sin(dot(uv, vec2(1225.6548, 321.8942))) * 4251.4865);
++}
+ 
+ mat4 brightnessMatrix() {
+ 	float b = brightness - 1.0;
+@@ -58,6 +65,15 @@ void main() {
+     sum += texture2D(tex, uv + vec2(-halfpixel.x, -halfpixel.y) * radius) * 2.0;
+ 
+ 	vec4 color = sum / 12.0;
++	if (apply_grain) {
++		// halfpixel is 1 / (4 * source_resolution) in the final upsample.
++		vec2 pixel_size = halfpixel * 4.0;
++		vec2 offset = vec2(rand(uv) - 0.5) *
++			2.0 * pixel_size * grain_scale;
++		vec3 grain = texture2D(tex,
++			clamp(uv + offset, vec2(0.0), vec2(1.0))).rgb;
++		color.rgb = mix(color.rgb, grain, grain_amount);
++	}
+ 	if (apply_color_adjustments) {
+ 		// Keep the same matrix order as the former post-processing pass.
+ 		color = brightnessMatrix() * contrastMatrix() * saturationMatrix() * color;
+diff --git a/types/fx/blur_data.c b/types/fx/blur_data.c
+index ae8fef0..228b5a3 100644
+--- a/types/fx/blur_data.c
++++ b/types/fx/blur_data.c
+@@ -4,6 +4,8 @@ struct blur_data blur_data_get_default(void) {
+ 	return (struct blur_data) {
+ 		.radius = 5,
+ 		.num_passes = 3,
++		.grain_amount = 0.0f,
++		.grain_scale = 50.0f,
+ 		.brightness = 0.9,
+ 		.contrast = 0.9,
+ 		.saturation = 1.1,
+@@ -20,6 +22,10 @@ bool blur_data_should_parameters_blur_effects(struct blur_data *blur_data) {
+ 		|| blur_data->contrast != 1.0f;
+ }
+ 
++bool blur_data_has_grain(const struct blur_data *blur_data) {
++	return blur_data->grain_amount > 0.0f;
++}
++
+ int blur_data_calc_size(struct blur_data *blur_data) {
+ 	return pow(2, blur_data->num_passes + 1) * blur_data->radius;
+ }
+@@ -29,6 +35,15 @@ static float lerp(float a, float b, float f) {
+ }
+ 
++int blur_data_calc_sample_size(struct blur_data *blur_data) {
++	int sample_size = blur_data_calc_size(blur_data);
++	if (blur_data_has_grain(blur_data)) {
++		sample_size += ceilf(blur_data->grain_scale);
++	}
++	return sample_size;
++}
++
+ static void adjust_post_effects(struct blur_data *blur_data, float strength) {
++	blur_data->grain_amount = lerp(0.0f, blur_data->grain_amount, strength);
+ 	blur_data->brightness = lerp(1.0, blur_data->brightness, strength);
+ 	blur_data->contrast = lerp(1.0, blur_data->contrast, strength);
+ 	blur_data->saturation = lerp(1.0, blur_data->saturation, strength);
+diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
+index dc68a5d..57352bc 100644
+--- a/types/scene/wlr_scene.c
++++ b/types/scene/wlr_scene.c
+@@ -1307,6 +1307,20 @@ void wlr_scene_set_blur_data(struct wlr_scene *scene, int num_passes,
+ 	scene_node_update(&scene->tree.node, NULL);
+ }
+ 
++void wlr_scene_set_blur_grain(struct wlr_scene *scene, float amount,
++		float scale) {
++	struct blur_data *blur_data = &scene->blur_data;
++	if (blur_data->grain_amount == amount && blur_data->grain_scale == scale) {
++		return;
++	}
++
++	blur_data->grain_amount = amount;
++	blur_data->grain_scale = scale;
++
++	mark_all_optimized_blur_nodes_dirty(&scene->tree.node);
++	scene_node_update(&scene->tree.node, NULL);
++}
++
+ void wlr_scene_set_blur_num_passes(struct wlr_scene *scene, int num_passes) {
+ 	struct blur_data *buff_data = &scene->blur_data;
+ 	if (buff_data->num_passes == num_passes) {
+@@ -2985 +2999 @@
+-	const int sample_size = blur_data_calc_size(blur_data);
++	const int sample_size = blur_data_calc_sample_size(blur_data);

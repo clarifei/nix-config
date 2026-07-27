@@ -38,6 +38,7 @@ let
           ./patches/scenefx-high-precision-blur.patch
           ./patches/scenefx-fused-blur-color.patch
           ./patches/scenefx-scene-tree-opacity.patch
+          ./patches/scenefx-static-grain.patch
         ];
         buildInputs = (old.buildInputs or [ ]) ++ [ lcms2 ];
         nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ glslang ];
@@ -62,6 +63,7 @@ in
     ./patches/labwc-scenefx-background-effects.patch
     ./patches/labwc-scenefx-effects-optimization.patch
     ./patches/labwc-scenefx-window-effects-docs.patch
+    ./patches/labwc-scenefx-static-grain.patch
     ./patches/labwc-tui-window-switcher.patch
   ];
 

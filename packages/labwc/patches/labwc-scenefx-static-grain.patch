@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Expose static SceneFX grain in windowEffects XML
+
+Expose static grain settings under windowEffects/blur/grain and forward them
+to SceneFX whenever Labwc reconfigures its effects.
+
+diff --git a/docs/labwc-config.5.scd b/docs/labwc-config.5.scd
+index e272106..3630586 100644
+--- a/docs/labwc-config.5.scd
++++ b/docs/labwc-config.5.scd
+@@ -722,6 +722,16 @@ surfaces participate in compositor opacity and blur.
+ 	Blur color adjustments, each between 0.0 and 2.0. Defaults are 0.9,
+ 	0.9 and 1.1, respectively.
+ 
++*<windowEffects><blur><grain><enabled>* [yes|no]
++	Enable static grain in the final blur upsample. Default is no.
++
++*<windowEffects><blur><grain><amount>*
++	Mix amount for the grain sample, between 0.0 and 1.0. Default is 0.12.
++
++*<windowEffects><blur><grain><scale>*
++	Maximum grain sample offset in pixels, between 0.0 and 200.0. Default is
++	50.0. The pattern remains static until the configuration is reloaded.
++
+ ## MARGIN
+ 
+ *<margin top="" bottom="" left="" right="" output="" />*
+diff --git a/docs/rc.xml.all b/docs/rc.xml.all
+index 45e9cc6..4caa2cb 100644
+--- a/docs/rc.xml.all
++++ b/docs/rc.xml.all
+@@ -93,6 +93,11 @@
+       <brightness>0.9</brightness>
+       <contrast>0.9</contrast>
+       <saturation>1.1</saturation>
++      <grain>
++        <enabled>no</enabled>
++        <amount>0.12</amount>
++        <scale>50.0</scale>
++      </grain>
+     </blur>
+   </windowEffects>
+ 
+diff --git a/include/config/rcxml.h b/include/config/rcxml.h
+index ae21d11..cbb2c20 100644
+--- a/include/config/rcxml.h
++++ b/include/config/rcxml.h
+@@ -125,6 +125,9 @@ struct rcxml {
+ 		float blur_brightness;
+ 		float blur_contrast;
+ 		float blur_saturation;
++		bool blur_grain_enabled;
++		float blur_grain_amount;
++		float blur_grain_scale;
+ 		struct {
+ 			bool enabled;
+ 			float opacity;
+diff --git a/src/config/rcxml.c b/src/config/rcxml.c
+index fd2ec0a..953a5c9 100644
+--- a/src/config/rcxml.c
++++ b/src/config/rcxml.c
+@@ -1229,6 +1229,16 @@ entry(xmlNode *node, char *nodename, char *content)
+ 		set_float(content, &rc.window_effects.blur_saturation);
+ 		rc.window_effects.blur_saturation = MAX(0.0f,
+ 			MIN(2.0f, rc.window_effects.blur_saturation));
++	} else if (!strcasecmp(nodename, "enabled.grain.blur.windowEffects")) {
++		set_bool(content, &rc.window_effects.blur_grain_enabled);
++	} else if (!strcasecmp(nodename, "amount.grain.blur.windowEffects")) {
++		set_float(content, &rc.window_effects.blur_grain_amount);
++		rc.window_effects.blur_grain_amount = MAX(0.0f,
++			MIN(1.0f, rc.window_effects.blur_grain_amount));
++	} else if (!strcasecmp(nodename, "scale.grain.blur.windowEffects")) {
++		set_float(content, &rc.window_effects.blur_grain_scale);
++		rc.window_effects.blur_grain_scale = MAX(0.0f,
++			MIN(200.0f, rc.window_effects.blur_grain_scale));
+ 	} else if (!strcasecmp(nodename, "enabled.layerShell.windowEffects")) {
+ 		set_bool(content, &rc.window_effects.layer_shell.enabled);
+ 	} else if (!strcasecmp(nodename, "opacity.layerShell.windowEffects")) {
+@@ -1569,6 +1579,9 @@ rcxml_init(void)
+ 	rc.window_effects.blur_brightness = 0.9f;
+ 	rc.window_effects.blur_contrast = 0.9f;
+ 	rc.window_effects.blur_saturation = 1.1f;
++	rc.window_effects.blur_grain_enabled = false;
++	rc.window_effects.blur_grain_amount = 0.12f;
++	rc.window_effects.blur_grain_scale = 50.0f;
+ 	rc.window_effects.layer_shell.enabled = false;
+ 	rc.window_effects.layer_shell.opacity = 1.0f;
+ 
+diff --git a/src/view.c b/src/view.c
+index a3c4977..9d1f182 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -533,6 +533,10 @@ view_effects_reconfigure(void)
+ 		rc.window_effects.blur_brightness,
+ 		rc.window_effects.blur_contrast,
+ 		rc.window_effects.blur_saturation);
++	wlr_scene_set_blur_grain(server.scene,
++		rc.window_effects.blur_grain_enabled
++			? rc.window_effects.blur_grain_amount : 0.0f,
++		rc.window_effects.blur_grain_scale);
+ 	view_effects_update_all();
+ 	layers_effects_reconfigure();
+ }

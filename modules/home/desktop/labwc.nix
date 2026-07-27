@@ -1,5 +1,7 @@
 let
   effectsOpacity = 0.90;
+  grainAmount = 0.12;
+  grainScale = 50.0;
 in
 {
   imports = [ ./labwc-keybinds.nix ];
@@ -43,6 +45,11 @@ in
           brightness = 0.9;
           contrast = 0.9;
           saturation = 1.1;
+          grain = {
+            enabled = "yes";
+            amount = grainAmount;
+            scale = grainScale;
+          };
         };
       };
       windowSwitcher = {
