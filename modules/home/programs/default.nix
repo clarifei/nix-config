@@ -7,18 +7,16 @@
 
 let
   codex = pkgs.callPackage ../../../packages/codex { };
-  nineRouter = pkgs.callPackage ../../../packages/9router { };
 in
 {
   home.packages = [
     codex
-    nineRouter
   ]
   ++ (with pkgs; [
     fd
     fastfetch
     jq
-    nodejs
+    nodejs_latest
     pnpm
     ripgrep
     uv
