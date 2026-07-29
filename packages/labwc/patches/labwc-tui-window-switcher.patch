@@ -74,7 +74,7 @@ index ccf5e81..94cac78 100644
  		arg_name = "command";
  		break;
  	case ACTION_TYPE_MOVE_TO_EDGE:
-@@ -1055,6 +1068,322 @@ warp_cursor(struct view *view, const char *to, const char *x, const char *y)
+@@ -1055,6 +1068,342 @@ warp_cursor(struct view *view, const char *to, const char *x, const char *y)
  	cursor_update_focus();
  }
  
@@ -98,6 +98,19 @@ index ccf5e81..94cac78 100644
 +	buf_add_fmt(path, "%s/labwc-window-switcher-%s.%s",
 +		runtime_dir, kind, generation);
 +	return true;
++}
++
++static void
++window_switcher_remove_file(const char *kind, const char *generation)
++{
++	if (!generation[0]) {
++		return;
++	}
++	struct buf path = BUF_INIT;
++	if (window_switcher_path(&path, kind, generation)) {
++		unlink(path.data);
++	}
++	buf_reset(&path);
 +}
 +
 +static int
@@ -286,6 +299,8 @@ index ccf5e81..94cac78 100644
 +		close(window_switcher_pidfd);
 +		window_switcher_pidfd = -1;
 +	}
++	window_switcher_remove_file("windows", window_switcher_generation);
++	window_switcher_remove_file("focus", window_switcher_generation);
 +	unsetenv("LABWC_WINDOW_SWITCHER_GENERATION");
 +}
 +
@@ -300,6 +315,11 @@ index ccf5e81..94cac78 100644
 +static void
 +export_window_list(void)
 +{
++	char previous_generation[sizeof(window_switcher_generation)];
++	snprintf(previous_generation, sizeof(previous_generation), "%s",
++		window_switcher_generation);
++	window_switcher_remove_file("windows", previous_generation);
++	window_switcher_remove_file("focus", previous_generation);
 +	window_switcher_generation[0] = '\0';
 +	unsetenv("LABWC_WINDOW_SWITCHER_GENERATION");
 +	if (!window_switcher_signal_source) {

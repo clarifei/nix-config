@@ -146,7 +146,7 @@ index df9b940..36771a2 100644
  #include <stdio.h>
  #include <stdlib.h>
  #include <unistd.h>
-@@ -31,6 +32,70 @@
+@@ -31,6 +32,67 @@
  static const struct wlr_renderer_impl renderer_impl;
  static const struct wlr_render_timer_impl render_timer_impl;
  
@@ -168,7 +168,7 @@ index df9b940..36771a2 100644
 +static bool init_grain_texture(struct fx_renderer *renderer) {
 +	size_t pixel_count =
 +		(size_t)FX_GRAIN_TEXTURE_SIZE * FX_GRAIN_TEXTURE_SIZE;
-+	uint8_t *pixels = malloc(pixel_count * 4);
++	uint8_t *pixels = malloc(pixel_count);
 +	if (!pixels) {
 +		wlr_log(WLR_ERROR, "Failed to allocate static grain texture");
 +		return false;
@@ -182,10 +182,7 @@ index df9b940..36771a2 100644
 +		uint16_t a = pcg32(&rng) >> 24;
 +		uint16_t b = pcg32(&rng) >> 24;
 +		uint8_t value = (a + b + 1) / 2;
-+		pixels[i * 4 + 0] = value;
-+		pixels[i * 4 + 1] = value;
-+		pixels[i * 4 + 2] = value;
-+		pixels[i * 4 + 3] = 255;
++		pixels[i] = value;
 +	}
 +
 +	for (int i = 0; i < 8 && glGetError() != GL_NO_ERROR; ++i) {
@@ -198,8 +195,8 @@ index df9b940..36771a2 100644
 +	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 +	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 +	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, FX_GRAIN_TEXTURE_SIZE,
-+		FX_GRAIN_TEXTURE_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
++	glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, FX_GRAIN_TEXTURE_SIZE,
++		FX_GRAIN_TEXTURE_SIZE, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, pixels);
 +	glBindTexture(GL_TEXTURE_2D, 0);
 +	free(pixels);
 +
