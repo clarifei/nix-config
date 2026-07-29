@@ -55,7 +55,10 @@ in
     firefox = {
       enable = true;
       profiles.default = {
-        settings."toolkit.legacyUserProfileCustomizations.stylesheets" = true;
+        settings = {
+          "browser.tabs.inTitlebar" = 0;
+          "toolkit.legacyUserProfileCustomizations.stylesheets" = true;
+        };
         userChrome = ./firefox-userChrome.css;
         userContent = ./firefox-userContent.css;
       };
