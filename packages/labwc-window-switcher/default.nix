@@ -115,8 +115,7 @@ writeShellApplication {
       [[ $current_start == "$expected_start" ]]
     }
 
-    # LABWC_PID can be recycled while an orphaned chooser is still alive.
-    # Match the process start time embedded by Labwc before sending any signal.
+    # labwc_pid can be reused; verify labwc's start time before signaling.
     if ! process_matches_record "$labwc_pid" "$generation_start_time"; then
       exit 0
     fi
@@ -258,21 +257,17 @@ writeShellApplication {
 
     remove_generation_directory() {
       rm -f -- "$foot_pid_file".*
-      # Keep the zero-byte generation lock until XDG runtime teardown. Removing
-      # a flock path could let a late process lock a different inode.
+      # keep the generation lock until runtime teardown to avoid inode reuse.
       rmdir -- "$state_dir" 2>/dev/null || true
     }
 
     if [[ $mode == accept || $mode == cancel ]]; then
-      # ExportWindowList creates export_file before Labwc starts this process,
-      # so a quick modifier release cannot race ahead of the terminal startup.
-      # The initial owner may not have taken its lock yet. The generation-local
-      # export lets this release wait safely without reaching a later session.
+      # wait for the generation-local export before handling a quick modifier release.
       if [[ -e $export_file ]] && wait_and_post "$move_action"; then
         exit 0
       fi
 
-      # The lock is authoritative: marker files and sockets can survive SIGKILL.
+      # the lock is authoritative; marker files and sockets can survive sigkill.
       exec {release_lock_fd}> "$lock_file"
       if ! flock --nonblock "$release_lock_fd"; then
         release_status=0
@@ -317,8 +312,7 @@ writeShellApplication {
       exit 0
     fi
 
-    # No wrapper owns the lock. Stop the precisely recorded Foot child before
-    # reusing this generation's socket and state.
+    # stop the recorded foot child before reusing this generation's socket and state.
     if [[ -e $control_socket ]]; then
       post_action cancel || true
     fi
@@ -331,7 +325,7 @@ writeShellApplication {
     session_dir=
     foot_pid=
 
-    # shellcheck disable=SC2329 # Invoked by the EXIT trap below.
+    # shellcheck disable=SC2329 # invoked by the exit trap below.
     cleanup() {
       if [[ -n $foot_pid ]] && ! terminate_orphan; then
         return

@@ -1,4 +1,4 @@
-/* Square Firefox's built-in content pages without affecting websites. */
+/* square firefox's built-in content pages without affecting websites. */
 
 @-moz-document url-prefix("about:") {
   :root {

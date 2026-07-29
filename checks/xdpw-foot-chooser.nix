@@ -93,8 +93,7 @@ runCommand "xdpw-foot-chooser-test"
     printf '%s\n' 'Monitor: DP-1 Main' | "$chooser" > "$run_dir/out-3"
     [[ $(wc -l < "$run_dir/count") -eq 2 ]]
 
-    # Titles can change while overlapping portal requests are queued. The stable identifier keeps
-    # both requests in one transaction, while each caller receives a label valid for its own list.
+    # stable target ids keep overlapping requests in one transaction.
     run_dir=$test_root/dynamic-title
     mkdir -p "$run_dir/runtime"
     : > "$run_dir/count"
@@ -123,8 +122,7 @@ runCommand "xdpw-foot-chooser-test"
     [[ $(<"$run_dir/out-2") == 'Window: Vesktop (window-1)' ]]
     [[ $(wc -l < "$run_dir/count") -eq 2 ]]
 
-    # Keep the first UI open while A, B, A requests receive ordered tickets. The B result must not
-    # overwrite the first A transaction before the final A waiter consumes it.
+    # keep a, b, a requests isolated until each transaction is consumed.
     run_dir=$test_root/interleaved
     mkdir -p "$run_dir/runtime"
     : > "$run_dir/count"
@@ -167,8 +165,7 @@ runCommand "xdpw-foot-chooser-test"
     [[ $(<"$run_dir/out-3") == 'Monitor: DP-1 Main' ]]
     [[ $(wc -l < "$run_dir/count") -eq 2 ]]
 
-    # SIGKILL bypasses EXIT traps. The next request must recognize the unlocked marker as stale so
-    # it cannot pin old transaction results for the remainder of the login session.
+    # sigkill skips exit traps; stale markers must not reuse old results.
     run_dir=$test_root/stale-pending
     mkdir -p "$run_dir/runtime/xdpw-foot-chooser"
     : > "$run_dir/count"

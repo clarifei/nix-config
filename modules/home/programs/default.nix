@@ -37,7 +37,7 @@ in
     "fastfetch/config.jsonc".source = ./fastfetch.jsonc;
     "foot/foot.ini".force = true;
   };
-  # Keep the configured Vesktop ahead of a stale standalone ~/.nix-profile entry.
+  # keep configured vesktop ahead of stale standalone profiles.
   home.sessionPath = [ "${config.home.homeDirectory}/.local/bin" ];
   home.file.".local/bin/vesktop".source = "${pkgs.vesktop}/bin/vesktop";
   home.file."${config.xdg.configHome}/starship.toml".force = true;

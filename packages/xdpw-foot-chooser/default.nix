@@ -49,9 +49,7 @@ writeShellApplication {
   text = ''
     umask 077
 
-    # xdpw can receive overlapping source requests while Chromium is preparing a preview and
-    # the final stream. Serialize the UI and only reuse a result for requests that started before
-    # the active chooser finished. A later workflow must always get a fresh selection.
+    # serialize overlapping chooser requests; later requests must get a fresh selection.
     chooser_runtime=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
     if [[ ! -d $chooser_runtime || ! -O $chooser_runtime ]]; then
       echo "xdpw-foot-chooser: no private runtime directory" >&2
@@ -84,8 +82,7 @@ writeShellApplication {
 
     cat > "$candidates"
     [[ -s $candidates ]] || exit 0
-    # Window titles may change between overlapping requests (for example, a terminal spinner).
-    # Hash stable target identities so those requests still share one selection transaction.
+    # hash stable target ids so changing window titles still share one transaction.
     candidate_hash=$(
       sed --regexp-extended \
         --expression='s/^Window: .* \(([^()]*)\)$/Window: \1/' \
@@ -121,8 +118,7 @@ writeShellApplication {
       return 1
     }
 
-    # Allocate an ordered ticket before waiting for the UI. The sequence lock is held only for
-    # this short update, so requests can queue while another request owns the UI lock.
+    # assign tickets before the ui lock; keep the sequence lock to this short update.
     exec {sequence_fd}> "$sequence_lock_file"
     flock --exclusive "$sequence_fd"
     sequence=0
@@ -141,9 +137,7 @@ writeShellApplication {
     exec {ui_fd}> "$ui_lock_file"
     flock --exclusive "$ui_fd"
 
-    # Keep completed transaction intervals until every older ticket has exited. This makes the
-    # protocol independent of the order in which flock wakes its waiters. Holding the sequence
-    # lock makes ticket creation atomic with its liveness lock, so unlocked markers are stale.
+    # keep results until older tickets exit; the sequence lock makes ticket and liveness atomic.
     flock --exclusive "$sequence_fd"
     minimum_pending=$request_ticket
     shopt -s nullglob
@@ -197,8 +191,7 @@ writeShellApplication {
       fi
     done
 
-    # A result is valid only for requests that received a ticket before the transaction
-    # completed. Sequential requests therefore always open a fresh chooser.
+    # only requests ticketed before completion may reuse a result.
     if [[ -n $result_file ]]; then
       case "$result_status" in
         selected)
@@ -219,8 +212,7 @@ writeShellApplication {
       local selection=''${2:-}
       local cutoff
 
-      # Snapshot the queue while assigning the completion boundary. A request that gets a
-      # ticket after this lock is released cannot consume this result.
+      # snapshot the queue before setting the completion boundary.
       flock --exclusive "$sequence_fd"
       cutoff=0
       if [[ -r $sequence_file ]]; then

@@ -91,8 +91,7 @@ let
         mime=
 
         if [[ $save == 1 && $has_glob_rules == 0 ]]; then
-          # The file contents do not exist yet, so MIME-only save filters
-          # cannot be validated reliably from the placeholder file.
+          # placeholder files have no contents, so mime-only save filters cannot be checked.
           return 0
         fi
 

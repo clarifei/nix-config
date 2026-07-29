@@ -22,8 +22,7 @@ let
     };
   };
 
-  # SceneFX needs to use the exact wlroots ABI used by Labwc. This commit is
-  # the first 0.5.x revision synchronized with wlroots 0.20.2.
+  # scenefx must match labwc's wlroots abi; this revision matches wlroots 0.20.2.
   scenefx_0_5 = (scenefx.override { wlroots_0_19 = wlroots; }).overrideAttrs (old: {
     version = "0.5.0-unstable-2026-07-13";
     src = fetchFromGitHub {
@@ -66,12 +65,12 @@ in
     ./patches/labwc-tui-window-switcher.patch
   ];
 
-  # The public SceneFX renderer header directly includes GLES2 headers.
+  # scenefx's renderer header includes gles2 headers.
   buildInputs = (old.buildInputs or [ ]) ++ [
     libGL
     scenefx_0_5
   ];
 
-  # Home Manager already owns labwc-session.target for this configuration.
+  # home manager owns labwc-session.target here.
   mesonFlags = (old.mesonFlags or [ ]) ++ [ (lib.mesonEnable "systemd-session" false) ];
 })

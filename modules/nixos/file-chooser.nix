@@ -15,7 +15,7 @@
         "org.freedesktop.impl.portal.Inhibit" = "none";
       };
 
-      # Also cover sessions that identify themselves only as wlroots.
+      # cover wlroots-only sessions too.
       wlroots."org.freedesktop.impl.portal.FileChooser" = "termfilechooser";
     };
   };

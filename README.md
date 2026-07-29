@@ -5,13 +5,13 @@
 Run from this repository:
 
 ```bash
-nh os switch . -H "$(hostname)"
+nh os switch . -H "$(hostname)" --accept-flake-config
 ```
 
 Dry-run first:
 
 ```bash
-nh os switch . -H "$(hostname)" --dry --no-nom
+nh os switch . -H "$(hostname)" --dry --no-nom --accept-flake-config
 ```
 
 Rollback:
@@ -28,7 +28,7 @@ Copy the host template, generate hardware config, then edit only `host.nix`:
 cp -a hosts/nixos hosts/<hostname>
 sudo nixos-generate-config --show-hardware-config > hosts/<hostname>/hardware-configuration.nix
 $EDITOR hosts/<hostname>/host.nix
-nh os switch . -H <hostname>
+nh os switch . -H <hostname> --accept-flake-config
 ```
 
 Set `system`, `username`, and `cpu` in `host.nix`. Add `graphics = "nvidia"`

@@ -39,7 +39,7 @@ in
         };
         blur = {
           enabled = "yes";
-          # Blur footprint grows exponentially with passes, so keep damage expansion low.
+          # blur damage grows with passes; keep expansion low.
           passes = 2;
           radius = 4;
           brightness = 0.9;
