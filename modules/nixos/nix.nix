@@ -1,4 +1,17 @@
-{ lib, pkgs, ... }:
+{
+  host,
+  lib,
+  pkgs,
+  ...
+}:
+
+let
+  allowUnfree = [
+    "codex"
+    "vscode"
+  ]
+  ++ lib.optional ((host.graphics or null) == "nvidia") "nvidia-x11";
+in
 
 {
   # keep bwrap in the system path for sandboxed tools
@@ -29,17 +42,10 @@
     };
   };
 
-  nixpkgs.config.allowUnfreePredicate =
-    pkg:
-    builtins.elem (lib.getName pkg) [
-      "codex"
-      "nvidia-x11"
-      "vscode"
-    ];
+  nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) allowUnfree;
 
   programs.nh = {
     enable = true;
-    flake = "/home/clarifei/nixos-config";
     clean = {
       enable = true;
       extraArgs = "--keep-since 7d --keep 5";

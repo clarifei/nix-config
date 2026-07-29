@@ -1,3 +1,5 @@
+{ host, lib, ... }:
+
 {
   imports = [
     ./hardware-configuration.nix
@@ -12,7 +14,9 @@
     ../../modules/nixos/screen-sharing.nix
     ../../modules/nixos/swap.nix
     ../../modules/nixos/system.nix
-  ];
+  ]
+  ++ lib.optional ((host.graphics or null) == "nvidia") ./graphics.nix;
 
-  system.stateVersion = "26.05";
+  nixpkgs.hostPlatform = host.system;
+  system.stateVersion = host.stateVersion;
 }

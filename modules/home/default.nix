@@ -1,3 +1,5 @@
+{ host, ... }:
+
 {
   imports = [
     ./desktop
@@ -6,8 +8,8 @@
   ];
 
   home = {
-    username = "clarifei";
-    homeDirectory = "/home/clarifei";
-    stateVersion = "26.05";
+    username = host.username;
+    homeDirectory = host.homeDirectory or "/home/${host.username}";
+    stateVersion = host.stateVersion;
   };
 }

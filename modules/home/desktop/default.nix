@@ -1,6 +1,5 @@
 {
   imports = [
-    ./kanshi.nix
     ./labwc.nix
     ./noctalia
   ];

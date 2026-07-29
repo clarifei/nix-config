@@ -1,5 +1,6 @@
 {
   config,
+  host,
   lib,
   pkgs,
   ...
@@ -9,23 +10,22 @@ let
   codex = pkgs.callPackage ../../../packages/codex { };
 in
 {
-  home.packages = [
-    codex
-  ]
-  ++ (with pkgs; [
-    fd
-    fastfetch
-    jq
-    nodejs_latest
-    pnpm
-    python3
-    ripgrep
-    uv
-    vscode
-    vesktop
-    wayland-utils
-    wlrctl
-  ]);
+  home.packages =
+    lib.optional (pkgs.system == "x86_64-linux") codex
+    ++ (with pkgs; [
+      fd
+      fastfetch
+      jq
+      nodejs_latest
+      pnpm
+      python3
+      ripgrep
+      uv
+      vscode
+      vesktop
+      wayland-utils
+      wlrctl
+    ]);
 
   home.sessionVariables = {
     UV_NO_MANAGED_PYTHON = "1";
@@ -48,18 +48,13 @@ in
       enable = true;
       settings = {
         init.defaultBranch = "main";
-        user = {
-          email = "nightcoremosta@gmail.com";
-          name = "Rendy Sebpian";
-        };
-      };
+      }
+      // lib.optionalAttrs (host ? git) { user = host.git; };
     };
     gh.enable = true;
     firefox = {
       enable = true;
       profiles.default = {
-        # This is the existing default Firefox profile, not a new profile.
-        path = "29azi75l.default";
         settings."toolkit.legacyUserProfileCustomizations.stylesheets" = true;
         userChrome = ./firefox-userChrome.css;
         userContent = ./firefox-userContent.css;

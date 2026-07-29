@@ -1,4 +1,9 @@
-{ pkgs, ... }:
+{
+  host,
+  lib,
+  pkgs,
+  ...
+}:
 
 {
   boot.loader = {
@@ -7,7 +12,6 @@
   };
 
   networking = {
-    hostName = "nixos";
     networkmanager.enable = true;
   };
 
@@ -25,14 +29,14 @@
     };
   };
 
-  users.users.clarifei = {
+  users.users.${host.username} = {
     isNormalUser = true;
     shell = pkgs.fish;
     extraGroups = [
-      "i2c"
       "networkmanager"
       "wheel"
-    ];
+    ]
+    ++ lib.optional (host.ddcutil or false) "i2c";
   };
 
   programs.fish.enable = true;

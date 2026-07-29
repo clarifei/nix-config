@@ -1,10 +1,11 @@
 {
   nixpkgs,
   noctalia,
+  system,
 }:
 
 let
-  pkgs = nixpkgs.legacyPackages.x86_64-linux;
+  pkgs = nixpkgs.legacyPackages.${system};
 in
 {
   labwc-scenefx = pkgs.callPackage ../packages/labwc { };

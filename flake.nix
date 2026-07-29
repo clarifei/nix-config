@@ -33,22 +33,44 @@
       noctalia,
       ...
     }:
-    {
-      checks.x86_64-linux = import ./checks {
-        inherit nixpkgs noctalia;
-      };
-
-      nixosConfigurations.nixos = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        specialArgs = {
-          inherit nix-cachyos-kernel noctalia;
+    let
+      hostDirectories = nixpkgs.lib.filterAttrs (
+        name: type: type == "directory" && builtins.pathExists (./hosts + "/${name}/host.nix")
+      ) (builtins.readDir ./hosts);
+      hosts = builtins.mapAttrs (
+        name: _: (import (./hosts + "/${name}/host.nix")) // { inherit name; }
+      ) hostDirectories;
+      hostSystems = nixpkgs.lib.unique (map (host: host.system) (builtins.attrValues hosts));
+      mkHost =
+        name: host:
+        nixpkgs.lib.nixosSystem {
+          inherit (host) system;
+          specialArgs = {
+            inherit host nix-cachyos-kernel noctalia;
+          };
+          modules = [
+            home-manager.nixosModules.home-manager
+            (./hosts + "/${name}")
+          ];
         };
-        modules = [
-          home-manager.nixosModules.home-manager
-          ./hosts/nixos
-        ];
-      };
+    in
+    {
+      nixosConfigurations = nixpkgs.lib.mapAttrs mkHost hosts;
 
-      formatter.x86_64-linux = nixpkgs.legacyPackages.x86_64-linux.nixfmt-tree;
+      checks = builtins.listToAttrs (
+        map (system: {
+          name = system;
+          value = import ./checks {
+            inherit nixpkgs noctalia system;
+          };
+        }) hostSystems
+      );
+
+      formatter = builtins.listToAttrs (
+        map (system: {
+          name = system;
+          value = nixpkgs.legacyPackages.${system}.nixfmt-tree;
+        }) hostSystems
+      );
     };
 }
