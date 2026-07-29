@@ -21,6 +21,7 @@ in
     python3
     ripgrep
     uv
+    vscode
     vesktop
     wayland-utils
     wlrctl

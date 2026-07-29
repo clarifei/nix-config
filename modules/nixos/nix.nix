@@ -34,6 +34,7 @@
     builtins.elem (lib.getName pkg) [
       "codex"
       "nvidia-x11"
+      "vscode"
     ];
 
   programs.nh = {
