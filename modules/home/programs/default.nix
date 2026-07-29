@@ -37,7 +37,7 @@ in
   # allow generated configs to replace stale home manager backups
   xdg.configFile = {
     "Code/argv.json".text = builtins.toJSON {
-      "password-store" = "gnome-libsecret";
+      "password-store" = "basic";
     };
     "fastfetch/config.jsonc".source = ./fastfetch.jsonc;
     "foot/foot.ini".force = true;
