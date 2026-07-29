@@ -1,5 +1,6 @@
 {
   config,
+  host,
   lib,
   pkgs,
   ...
@@ -14,17 +15,23 @@
   services.greetd = {
     enable = true;
     useTextGreeter = true;
-    settings.default_session = {
-      command = lib.concatStringsSep " " [
-        (lib.getExe pkgs.tuigreet)
-        "--time"
-        "--remember"
-        "--remember-session"
-        "--asterisks"
-        "--sessions ${config.services.displayManager.sessionData.desktops}/share/wayland-sessions"
-        "--cmd labwc"
-      ];
-      user = "greeter";
+    settings = {
+      initial_session = {
+        command = lib.getExe pkgs.labwc;
+        user = host.username;
+      };
+      default_session = {
+        command = lib.concatStringsSep " " [
+          (lib.getExe pkgs.tuigreet)
+          "--time"
+          "--remember"
+          "--remember-session"
+          "--asterisks"
+          "--sessions ${config.services.displayManager.sessionData.desktops}/share/wayland-sessions"
+          "--cmd labwc"
+        ];
+        user = "greeter";
+      };
     };
   };
 }
