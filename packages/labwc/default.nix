@@ -36,12 +36,14 @@ let
       ./patches/scenefx-fused-blur-color.patch
       ./patches/scenefx-scene-tree-opacity.patch
       ./patches/scenefx-static-grain.patch
+      ./patches/scenefx-global-monochrome.patch
     ];
     buildInputs = (old.buildInputs or [ ]) ++ [ lcms2 ];
     nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ glslang ];
     postPatch = (old.postPatch or "") + ''
       glslangValidator -S frag render/fx_renderer/shaders/blur1.frag
       glslangValidator -S frag render/fx_renderer/shaders/blur2.frag
+      glslangValidator -S frag render/fx_renderer/shaders/monochrome.frag
     '';
     mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Dexamples=false" ];
   });
@@ -62,6 +64,7 @@ in
     ./patches/labwc-scenefx-effects-optimization.patch
     ./patches/labwc-scenefx-window-effects-docs.patch
     ./patches/labwc-scenefx-static-grain.patch
+    ./patches/labwc-scenefx-monochrome.patch
     ./patches/labwc-tui-window-switcher.patch
   ];
 

@@ -1,0 +1,54 @@
+diff --git a/docs/labwc-actions.5.scd b/docs/labwc-actions.5.scd
+index d7d2a1e..bb83279 100644
+--- a/docs/labwc-actions.5.scd
++++ b/docs/labwc-actions.5.scd
+@@ -207,6 +207,9 @@ Actions are used in menus and keyboard/mouse bindings.
+ 	Fullscreen windows use compositor opacity 1.0 with blur disabled; client
+ 	alpha modifiers still apply.
+ 
++*<action name="ToggleMonochrome" />*
++	Toggle the output-wide monochrome shader. Disabled by default.
++
+ *<action name="SetDecorations" decorations="value" forceSSD="no" />*
+ 	Set decorations of focused window.
+ 
+diff --git a/docs/labwc-config.5.scd b/docs/labwc-config.5.scd
+index 2511090..54e51d2 100644
+--- a/docs/labwc-config.5.scd
++++ b/docs/labwc-config.5.scd
+@@ -690,6 +690,10 @@ Layer-shell effects apply only to surfaces that request a non-empty blur
+ region using ext-background-effect-v1. This lets clients select which shell
+ surfaces participate in compositor opacity and blur.
+ 
++*<action name="ToggleMonochrome" />*
++	Toggle the output-wide monochrome shader. Disabled by default and applied
++to the complete composed output, including layer-shell surfaces.
++
+ *<windowEffects><enabled>* [yes|no]
+ 	Enable window opacity and blur. Default is no.
+ 
+diff --git a/src/action.c b/src/action.c
+index ccf5e81..c55d9a0 100644
+--- a/src/action.c
++++ b/src/action.c
+@@ -95,6 +95,7 @@ struct action_arg_list {
+ 	X(SET_DECORATIONS, "SetDecorations") \
+ 	X(TOGGLE_DECORATIONS, "ToggleDecorations") \
+ 	X(TOGGLE_WINDOW_EFFECTS, "ToggleWindowEffects") \
++	X(TOGGLE_MONOCHROME, "ToggleMonochrome") \
+ 	X(TOGGLE_ALWAYS_ON_TOP, "ToggleAlwaysOnTop") \
+ 	X(TOGGLE_ALWAYS_ON_BOTTOM, "ToggleAlwaysOnBottom") \
+ 	X(TOGGLE_OMNIPRESENT, "ToggleOmnipresent") \
+@@ -1221,6 +1222,12 @@ run_action(struct view *view, struct action *action,
+ 			view_effects_toggle(view);
+ 		}
+ 		break;
++	case ACTION_TYPE_TOGGLE_MONOCHROME:
++		if (server.scene) {
++			wlr_scene_set_monochrome(server.scene,
++				!wlr_scene_get_monochrome(server.scene));
++		}
++		break;
+ 	case ACTION_TYPE_TOGGLE_ALWAYS_ON_TOP:
+ 		if (view) {
+ 			view_toggle_always_on_top(view);

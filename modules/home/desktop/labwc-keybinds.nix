@@ -108,6 +108,10 @@ in
         action = action "ToggleWindowEffects" { };
       }
       {
+        "@key" = "W-S-m";
+        action = action "ToggleMonochrome" { };
+      }
+      {
         "@key" = "W-h";
         action = action "SnapToEdge" { "@direction" = "left"; };
       }

@@ -1,0 +1,287 @@
+diff --git a/include/render/fx_renderer/fx_renderer.h b/include/render/fx_renderer/fx_renderer.h
+index c36644e..698cb32 100644
+--- a/include/render/fx_renderer/fx_renderer.h
++++ b/include/render/fx_renderer/fx_renderer.h
+@@ -204,6 +204,7 @@ struct fx_renderer {
+ 		struct box_shadow_shader box_shadow;
+ 		struct blur_shader blur1;
+ 		struct blur_shader blur2;
++		struct monochrome_shader monochrome;
+ 	} shaders;
+ 
+ 	GLuint grain_texture;
+diff --git a/include/render/fx_renderer/shaders.h b/include/render/fx_renderer/shaders.h
+index d435b7c..76152fd 100644
+--- a/include/render/fx_renderer/shaders.h
++++ b/include/render/fx_renderer/shaders.h
+@@ -171,4 +171,14 @@ struct blur_shader {
+ bool link_blur1_program(struct blur_shader *shader);
+ bool link_blur2_program(struct blur_shader *shader);
+ 
++struct monochrome_shader {
++	GLuint program;
++	GLint proj;
++	GLint tex_proj;
++	GLint tex;
++	GLint pos_attrib;
++};
++
++bool link_monochrome_program(struct monochrome_shader *shader);
++
+ #endif
+diff --git a/include/scenefx/render/pass.h b/include/scenefx/render/pass.h
+index 0ef3750..922bed4 100644
+--- a/include/scenefx/render/pass.h
++++ b/include/scenefx/render/pass.h
+@@ -154,7 +154,10 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
+  * Render from one buffer to another
+  */
+ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
+-		pixman_region32_t *region, struct fx_framebuffer *dst_buffer,
++		const pixman_region32_t *region, struct fx_framebuffer *dst_buffer,
+ 		struct fx_framebuffer *src_buffer);
+ 
++void fx_render_pass_apply_monochrome(struct fx_gles_render_pass *pass,
++	const pixman_region32_t *region);
++
+ #endif
+diff --git a/include/scenefx/types/wlr_scene.h b/include/scenefx/types/wlr_scene.h
+index 73473c9..c534e0e 100644
+--- a/include/scenefx/types/wlr_scene.h
++++ b/include/scenefx/types/wlr_scene.h
+@@ -124,6 +124,7 @@ struct wlr_scene {
+ 		bool direct_scanout;
+ 		bool calculate_visibility;
+ 		bool highlight_transparent_region;
++		bool monochrome_enabled;
+ 
+ 		struct blur_data blur_data;
+ 	} WLR_PRIVATE;
+@@ -419,6 +420,9 @@ void wlr_scene_set_blur_data(struct wlr_scene *scene, int num_passes,
+ void wlr_scene_set_blur_grain(struct wlr_scene *scene, float amount,
+ 	float size);
+ 
++void wlr_scene_set_monochrome(struct wlr_scene *scene, bool enabled);
++bool wlr_scene_get_monochrome(const struct wlr_scene *scene);
++
+ // Sets the global blur num_passes parameter
+ void wlr_scene_set_blur_num_passes(struct wlr_scene *scene, int num_passes);
+ 
+diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
+index 0ef4999..29aa5e0 100644
+--- a/render/fx_renderer/fx_pass.c
++++ b/render/fx_renderer/fx_pass.c
+@@ -1194,7 +1194,7 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
+ }
+ 
+ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
+-		pixman_region32_t *_region, struct fx_framebuffer *dst_buffer,
++		const pixman_region32_t *_region, struct fx_framebuffer *dst_buffer,
+ 		struct fx_framebuffer *src_buffer) {
+ 	if (!_region || !pixman_region32_not_empty(_region)) {
+ 		return;
+@@ -1242,6 +1242,62 @@ done:
+ 	pixman_region32_fini(&region);
+ }
+ 
++static void render_monochrome(struct fx_gles_render_pass *pass,
++		const pixman_region32_t *region, struct fx_framebuffer *src_buffer) {
++	struct fx_renderer *renderer = pass->buffer->renderer;
++	struct wlr_buffer *buffer = pass->buffer->buffer;
++	struct wlr_texture *src_texture = fx_texture_from_buffer(
++		&renderer->wlr_renderer, src_buffer->buffer);
++	if (!src_texture) {
++		return;
++	}
++
++	struct fx_texture *texture = fx_get_texture(src_texture);
++	struct wlr_box box = {
++		.width = buffer->width,
++		.height = buffer->height,
++	};
++	struct wlr_fbox src_box = {
++		.width = src_texture->width,
++		.height = src_texture->height,
++	};
++	src_box.x /= src_texture->width;
++	src_box.y /= src_texture->height;
++	src_box.width /= src_texture->width;
++	src_box.height /= src_texture->height;
++
++	glDisable(GL_BLEND);
++	glDisable(GL_STENCIL_TEST);
++	glUseProgram(renderer->shaders.monochrome.program);
++	glActiveTexture(GL_TEXTURE0);
++	glBindTexture(texture->target, texture->tex);
++	glTexParameteri(texture->target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++	glTexParameteri(texture->target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++	glUniform1i(renderer->shaders.monochrome.tex, 0);
++	set_proj_matrix(renderer->shaders.monochrome.proj,
++		pass->projection_matrix, &box);
++	set_tex_matrix(renderer->shaders.monochrome.tex_proj,
++		WL_OUTPUT_TRANSFORM_NORMAL, &src_box);
++	render(&box, region, renderer->shaders.monochrome.pos_attrib);
++	glBindTexture(texture->target, 0);
++
++	wlr_texture_destroy(src_texture);
++}
++
++void fx_render_pass_apply_monochrome(struct fx_gles_render_pass *pass,
++		const pixman_region32_t *region) {
++	if (!pass->fx_offscreen_buffers || !region
++			|| !pixman_region32_not_empty(region)) {
++		return;
++	}
++
++	struct fx_framebuffer *buffer = pass->fx_offscreen_buffers->effects_buffer;
++	fx_render_pass_read_to_buffer(pass, region,
++		buffer, pass->buffer);
++	fx_framebuffer_bind(pass->buffer);
++	render_monochrome(pass, region, buffer);
++}
++
+ static const char *reset_status_str(GLenum status) {
+ 	switch (status) {
+ 	case GL_GUILTY_CONTEXT_RESET_KHR:
+diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
+index e3bc996..1bd1f4b 100644
+--- a/render/fx_renderer/fx_renderer.c
++++ b/render/fx_renderer/fx_renderer.c
+@@ -159,6 +159,7 @@ static inline void free_shaders(struct fx_renderer *renderer) {
+ 	glDeleteProgram(renderer->shaders.box_shadow.program);
+ 	glDeleteProgram(renderer->shaders.blur1.program);
+ 	glDeleteProgram(renderer->shaders.blur2.program);
++	glDeleteProgram(renderer->shaders.monochrome.program);
+ 	pop_fx_debug(renderer);
+ }
+ 
+@@ -501,6 +502,10 @@ static bool link_shaders(struct fx_renderer *renderer) {
+ 		wlr_log(WLR_ERROR, "Could not link blur2 shader");
+ 		goto error;
+ 	}
++	if (!link_monochrome_program(&renderer->shaders.monochrome)) {
++		wlr_log(WLR_ERROR, "Could not link monochrome shader");
++		goto error;
++	}
+ 
+ 	return true;
+ 
+diff --git a/render/fx_renderer/shaders.c b/render/fx_renderer/shaders.c
+index 1788954..f9e8d8c 100644
+--- a/render/fx_renderer/shaders.c
++++ b/render/fx_renderer/shaders.c
+@@ -19,6 +19,7 @@
+ #include "box_shadow_frag_src.h"
+ #include "blur1_frag_src.h"
+ #include "blur2_frag_src.h"
++#include "monochrome_frag_src.h"
+ 
+ GLuint compile_shader(GLuint type, const GLchar *src) {
+ 	GLuint shader = glCreateShader(type);
+@@ -350,3 +351,18 @@ bool link_blur2_program(struct blur_shader *shader) {
+ 
+ 	return true;
+ }
++
++bool link_monochrome_program(struct monochrome_shader *shader) {
++	GLuint prog;
++	shader->program = prog = link_program(monochrome_frag_src);
++	if (!shader->program) {
++		return false;
++	}
++
++	shader->proj = glGetUniformLocation(prog, "proj");
++	shader->tex = glGetUniformLocation(prog, "tex");
++	shader->pos_attrib = glGetAttribLocation(prog, "pos");
++	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
++
++	return true;
++}
+diff --git a/render/fx_renderer/shaders/meson.build b/render/fx_renderer/shaders/meson.build
+index 806daa4..13824cb 100644
+--- a/render/fx_renderer/shaders/meson.build
++++ b/render/fx_renderer/shaders/meson.build
+@@ -13,6 +13,7 @@ shaders = [
+ 	'box_shadow.frag',
+ 	'blur1.frag',
+ 	'blur2.frag',
++	'monochrome.frag',
+ ]
+ 
+ foreach name : shaders
+diff --git a/render/fx_renderer/shaders/monochrome.frag b/render/fx_renderer/shaders/monochrome.frag
+new file mode 100644
+index 0000000..24dbdf4
+--- /dev/null
++++ b/render/fx_renderer/shaders/monochrome.frag
+@@ -0,0 +1,14 @@
++#ifdef GL_FRAGMENT_PRECISION_HIGH
++precision highp float;
++#else
++precision mediump float;
++#endif
++
++varying vec2 v_texcoord;
++uniform sampler2D tex;
++
++void main() {
++	vec4 color = texture2D(tex, v_texcoord);
++	float luminance = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
++	gl_FragColor = vec4(vec3(luminance), color.a);
++}
+diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
+index 41dac30..ea92106 100644
+--- a/types/scene/wlr_scene.c
++++ b/types/scene/wlr_scene.c
+@@ -231,6 +231,7 @@ struct wlr_scene *wlr_scene_create(void) {
+ 	scene->direct_scanout = !env_parse_bool("WLR_SCENE_DISABLE_DIRECT_SCANOUT");
+ 	scene->calculate_visibility = !env_parse_bool("WLR_SCENE_DISABLE_VISIBILITY");
+ 	scene->highlight_transparent_region = env_parse_bool("WLR_SCENE_HIGHLIGHT_TRANSPARENT_REGION");
++	scene->monochrome_enabled = false;
+ 
+ 	scene->blur_data = blur_data_get_default();
+ 
+@@ -1321,6 +1322,22 @@ void wlr_scene_set_blur_grain(struct wlr_scene *scene, float amount,
+ 	scene_node_update(&scene->tree.node, NULL);
+ }
+ 
++void wlr_scene_set_monochrome(struct wlr_scene *scene, bool enabled) {
++	if (scene->monochrome_enabled == enabled) {
++		return;
++	}
++
++	scene->monochrome_enabled = enabled;
++	struct wlr_scene_output *scene_output;
++	wl_list_for_each(scene_output, &scene->outputs, link) {
++		scene_output_damage_whole(scene_output);
++	}
++}
++
++bool wlr_scene_get_monochrome(const struct wlr_scene *scene) {
++	return scene->monochrome_enabled;
++}
++
+ void wlr_scene_set_blur_num_passes(struct wlr_scene *scene, int num_passes) {
+ 	struct blur_data *buff_data = &scene->blur_data;
+ 	if (buff_data->num_passes == num_passes) {
+@@ -2836,7 +2853,8 @@ static enum scene_direct_scanout_result scene_entry_try_direct_scanout(
+ 	struct wlr_scene_output *scene_output = data->output;
+ 	struct wlr_scene_node *node = entry->node;
+ 
+-	if (!scene_output->scene->direct_scanout) {
++	if (!scene_output->scene->direct_scanout
++			|| scene_output->scene->monochrome_enabled) {
+ 		return SCANOUT_INELIGIBLE;
+ 	}
+ 
+@@ -3560,6 +3578,10 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+ 				fx_pass->buffer, fx_pass->fx_offscreen_buffers->blur_saved_pixels_buffer);
+ 	}
+ 
++	if (scene_output->scene->monochrome_enabled) {
++		fx_render_pass_apply_monochrome(fx_pass, &render_data.damage);
++	}
++
+ 	pixman_region32_fini(&render_data.damage);
+ 
+ 	if (!wlr_render_pass_submit(render_pass)) {
