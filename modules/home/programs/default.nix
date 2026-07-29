@@ -11,7 +11,7 @@ let
 in
 {
   home.packages =
-    lib.optional (pkgs.system == "x86_64-linux") codex
+    lib.optional (pkgs.stdenv.hostPlatform.system == "x86_64-linux") codex
     ++ (with pkgs; [
       fd
       fastfetch
