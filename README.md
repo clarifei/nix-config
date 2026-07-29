@@ -5,7 +5,7 @@
 Run from this repository:
 
 ```bash
-sudo nh os switch . -H "$(hostname)"
+nh os switch . -H "$(hostname)"
 ```
 
 Dry-run first:
@@ -17,7 +17,7 @@ nh os switch . -H "$(hostname)" --dry --no-nom
 Rollback:
 
 ```bash
-sudo nh os rollback
+nh os rollback
 ```
 
 ## New Machine
@@ -28,7 +28,7 @@ Copy the host template, generate hardware config, then edit only `host.nix`:
 cp -a hosts/nixos hosts/<hostname>
 sudo nixos-generate-config --show-hardware-config > hosts/<hostname>/hardware-configuration.nix
 $EDITOR hosts/<hostname>/host.nix
-sudo nh os switch . -H <hostname>
+nh os switch . -H <hostname>
 ```
 
 Set `system`, `username`, and `cpu` in `host.nix`. Add `graphics = "nvidia"`
