@@ -2,6 +2,7 @@
   imports = [
     ./labwc.nix
     ./noctalia
+    ./refresh-rate.nix
   ];
 
   xdg.enable = true;
