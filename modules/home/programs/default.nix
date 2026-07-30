@@ -8,7 +8,6 @@
 
 let
   codex = pkgs.callPackage ../../../packages/codex { };
-  graphifySupport = ../../../packages/graphify-nix-support;
 in
 {
   home.packages =
@@ -17,7 +16,6 @@ in
       fd
       fastfetch
       jq
-      nil
       nodejs_latest
       pnpm
       python3
@@ -46,11 +44,6 @@ in
   home.sessionPath = [ "${config.home.homeDirectory}/.local/bin" ];
   home.file.".local/bin/vesktop".source = "${pkgs.vesktop}/bin/vesktop";
   home.file."${config.xdg.configHome}/starship.toml".force = true;
-  home.file."${config.xdg.dataHome}/uv/tools/graphifyy/${pkgs.python3.sitePackages}/graphify-nix-support.pth".text =
-    ''
-      ${graphifySupport}
-      import graphify_nix_support; graphify_nix_support.install()
-    '';
 
   programs = {
     home-manager.enable = true;

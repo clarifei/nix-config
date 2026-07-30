@@ -10,20 +10,6 @@ in
 {
   labwc-scenefx = pkgs.callPackage ../packages/labwc { };
 
-  graphify-nix-support =
-    pkgs.runCommand "graphify-nix-support-test"
-      {
-        nativeBuildInputs = [
-          pkgs.nil
-          pkgs.python3
-        ];
-      }
-      ''
-        PYTHONPATH=${../packages/graphify-nix-support} \
-          python ${../packages/graphify-nix-support/test_graphify_nix_support.py}
-        touch "$out"
-      '';
-
   noctalia = import ../packages/noctalia { inherit noctalia pkgs; };
 
   noctalia-audio-grouping =
