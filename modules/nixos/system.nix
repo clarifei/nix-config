@@ -15,6 +15,10 @@
     networkmanager.enable = true;
   };
 
+  virtualisation.docker.enable = true;
+
+  environment.systemPackages = [ pkgs.docker-compose ];
+
   time.timeZone = "Asia/Jakarta";
   i18n.defaultLocale = "en_US.UTF-8";
 
@@ -33,6 +37,7 @@
     isNormalUser = true;
     shell = pkgs.fish;
     extraGroups = [
+      "docker"
       "networkmanager"
       "wheel"
     ]
