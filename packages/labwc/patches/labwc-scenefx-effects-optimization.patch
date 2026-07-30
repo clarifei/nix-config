@@ -235,6 +235,61 @@ index 4742b0b..705e949 100644
  	}
  
  	wlr_scene_node_set_enabled(&view->content_tree->node, !view->shaded);
--- 
+diff --git a/src/output.c b/src/output.c
+--- a/src/output.c
++++ b/src/output.c
+@@ -415,4 +415,22 @@ add_output_to_layout(struct output *output)
+ }
+ 
++static struct wlr_output_mode *
++get_highest_native_mode(struct wlr_output *wlr_output)
++{
++	struct wlr_output_mode *highest = NULL;
++	struct wlr_output_mode *mode;
++	wl_list_for_each(mode, &wlr_output->modes, link) {
++		long long pixels = (long long)mode->width * mode->height;
++		long long highest_pixels = highest
++			? (long long)highest->width * highest->height : 0;
++		if (!highest || pixels > highest_pixels
++				|| (pixels == highest_pixels
++					&& mode->refresh > highest->refresh)) {
++			highest = mode;
++		}
++	}
++	return highest;
++}
++
+ static bool
+ output_test_auto(struct wlr_output *wlr_output, struct wlr_output_state *state,
+@@ -461,4 +479,15 @@ output_test_auto(struct wlr_output *wlr_output, struct wlr_output_state *state,
+ 	}
+ 
++	struct wlr_output_mode *highest_mode =
++		get_highest_native_mode(wlr_output);
++	if (highest_mode) {
++		wlr_log(WLR_DEBUG, "testing highest native mode %dx%d@%d",
++			highest_mode->width, highest_mode->height,
++			highest_mode->refresh);
++		wlr_output_state_set_mode(state, highest_mode);
++		if (wlr_output_test_state(wlr_output, state)) {
++			return true;
++		}
++	}
+ 	struct wlr_output_mode *preferred_mode =
+ 		wlr_output_preferred_mode(wlr_output);
+@@ -465,5 +494,5 @@ output_test_auto(struct wlr_output *wlr_output, struct wlr_output_state *state,
+ 	struct wlr_output_mode *preferred_mode =
+ 		wlr_output_preferred_mode(wlr_output);
+-	if (preferred_mode) {
++	if (preferred_mode && preferred_mode != highest_mode) {
+ 		wlr_log(WLR_DEBUG, "testing preferred mode %dx%d@%d",
+ 			preferred_mode->width, preferred_mode->height,
+@@ -483,5 +512,5 @@ output_test_auto(struct wlr_output *wlr_output, struct wlr_output_state *state,
+ 	struct wlr_output_mode *mode;
+ 	wl_list_for_each(mode, &wlr_output->modes, link) {
+-		if (mode == preferred_mode) {
++		if (mode == preferred_mode || mode == highest_mode) {
+ 			continue;
+ 		}
+--
 2.54.0
-
