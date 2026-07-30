@@ -37,6 +37,7 @@ let
       ./patches/scenefx-scene-tree-opacity.patch
       ./patches/scenefx-static-grain.patch
       ./patches/scenefx-global-monochrome.patch
+      ./patches/scenefx-clip-blur-damage.patch
     ];
     buildInputs = (old.buildInputs or [ ]) ++ [ lcms2 ];
     nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ glslang ];

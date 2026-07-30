@@ -1,0 +1,46 @@
+From b281e32861785b383e89bf8924713d59b1c7b3f8 Mon Sep 17 00:00:00 2001
+From: ElnuDev <elnu@elnu.com>
+Date: Mon, 27 Jul 2026 13:44:19 -0700
+Subject: [PATCH] blur: clip damage compensation to the output
+
+apply_blur_region() unions the blur node's visible region, intersected with
+the expanded frame damage, into output_state->damage. node->visible is in
+layout coordinates, so a node straddling two outputs reaches outside the
+output being rendered, giving negative coordinates once translated to
+output-relative space.
+
+render_data->damage is clipped to the output later in
+scene_output_build_state(), but output_state->damage never is, so those
+rectangles are published on commit. wlroots forwards output_state->damage to
+ext-image-copy-capture sessions, where x < 0 || y < 0 || width <= 0 ||
+height <= 0 is invalid_buffer_damage, a fatal protocol error. In practice any
+monitor screencast through xdg-desktop-portal-wlr dies the moment a window is
+dragged across the boundary between two outputs.
+
+Damage outside the output cannot be rendered into its buffer, so clipping
+loses nothing. The emptiness check is needed because
+pixman_region32_intersect() reports whether the operation succeeded rather
+than whether the result is non-empty.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ types/scene/wlr_scene.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
+index 02532b11..0ad632e7 100644
+--- a/types/scene/wlr_scene.c
++++ b/types/scene/wlr_scene.c
+@@ -2920,6 +2920,12 @@ static bool apply_blur_region(struct wlr_scene_node *node, struct blur_data *blu
+ 	pixman_region32_t intersection;
+ 	pixman_region32_init(&intersection);
+ 	if (pixman_region32_intersect(&intersection, &expanded_damage, &node_visible_region)) {
++		struct wlr_output *output = render_data->output->output;
++		pixman_region32_intersect_rect(&intersection, &intersection,
++			0, 0, output->width, output->height);
++	}
++
++	if (!pixman_region32_empty(&intersection)) {
+ 		should_compensate_blur = true;
+ 
+ 		// Expand the render damage to re-render surrounding blur nodes
