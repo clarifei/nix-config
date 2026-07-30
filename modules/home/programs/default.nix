@@ -8,10 +8,16 @@
 
 let
   codex = pkgs.callPackage ../../../packages/codex { };
+  codebaseMemoryMcp = pkgs.callPackage ../../../packages/codebase-memory-mcp { };
+  rtk = pkgs.callPackage ../../../packages/rtk { };
 in
 {
   home.packages =
-    lib.optional (pkgs.stdenv.hostPlatform.system == "x86_64-linux") codex
+    lib.optionals (pkgs.stdenv.hostPlatform.system == "x86_64-linux") [
+      codex
+      codebaseMemoryMcp
+      rtk
+    ]
     ++ (with pkgs; [
       cargo
       fd
@@ -45,7 +51,20 @@ in
   # keep configured vesktop ahead of stale standalone profiles.
   home.sessionPath = [ "${config.home.homeDirectory}/.local/bin" ];
   home.file.".local/bin/vesktop".source = "${pkgs.vesktop}/bin/vesktop";
+  home.file.".local/bin/rtk" = {
+    source = "${rtk}/bin/rtk";
+    force = true;
+  };
   home.file."${config.xdg.configHome}/starship.toml".force = true;
+  home.activation.codebaseMemoryMcp = lib.hm.dag.entryAfter [ "installPackages" ] ''
+    run ${lib.getExe codex} mcp add codebase-memory-mcp -- ${lib.getExe codebaseMemoryMcp}
+    run ${pkgs.coreutils}/bin/rm -f "${config.home.homeDirectory}/.local/share/codebase-memory-mcp/codebase-memory-mcp"
+  '';
+  home.activation.legacyUserInstallCleanup = lib.hm.dag.entryAfter [ "codebaseMemoryMcp" ] ''
+    run ${pkgs.coreutils}/bin/rm -rf "${config.home.homeDirectory}/.local/share/GitKrakenCLI/versions"
+    run ${pkgs.coreutils}/bin/rm -f "${config.home.homeDirectory}/.local/share/gk"
+    run ${pkgs.coreutils}/bin/rm -rf "${config.xdg.dataHome}/uv/python"
+  '';
 
   programs = {
     home-manager.enable = true;
