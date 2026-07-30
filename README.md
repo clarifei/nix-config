@@ -1,28 +1,28 @@
-# NixOS Config
+# nixos config
 
-## Apply
+## apply
 
-Run from this repository:
+from the repo root:
 
 ```bash
 nh os switch . -H "$(hostname)" --accept-flake-config
 ```
 
-Dry-run first:
+dry run:
 
 ```bash
 nh os switch . -H "$(hostname)" --dry --no-nom --accept-flake-config
 ```
 
-Rollback:
+rollback:
 
 ```bash
 nh os rollback
 ```
 
-## New Machine
+## new machine
 
-Copy the host template, generate hardware config, then edit only `host.nix`:
+copy the template, generate the hardware config, edit `host.nix`, then apply:
 
 ```bash
 cp -a hosts/nixos hosts/<hostname>
@@ -31,6 +31,15 @@ $EDITOR hosts/<hostname>/host.nix
 nh os switch . -H <hostname> --accept-flake-config
 ```
 
-Set `system`, `username`, and `cpu` in `host.nix`. Add `graphics = "nvidia"`
-only for NVIDIA hosts and `ddcutil = true` only when monitor DDC control is
-available. The flake discovers host directories automatically.
+set these values in `host.nix`:
+
+* `system`
+* `username`
+* `cpu`
+
+optional:
+
+* `graphics = "nvidia"` for nvidia systems
+* `ddcutil = true` when monitor ddc control is available
+
+host directories are discovered automatically by the flake.
