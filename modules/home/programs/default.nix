@@ -13,6 +13,7 @@ in
   home.packages =
     lib.optional (pkgs.stdenv.hostPlatform.system == "x86_64-linux") codex
     ++ (with pkgs; [
+      cargo
       fd
       fastfetch
       jq
@@ -20,6 +21,7 @@ in
       pnpm
       python3
       ripgrep
+      rustc
       uv
       vscode
       vesktop
