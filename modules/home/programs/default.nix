@@ -62,7 +62,7 @@ in
   '';
   home.activation.legacyUserInstallCleanup = lib.hm.dag.entryAfter [ "codebaseMemoryMcp" ] ''
     run ${pkgs.coreutils}/bin/rm -rf "${config.home.homeDirectory}/.local/share/GitKrakenCLI/versions"
-    run ${pkgs.coreutils}/bin/rm -f "${config.home.homeDirectory}/.local/share/gk"
+    run ${pkgs.coreutils}/bin/rm -f "${config.home.homeDirectory}/.local/share/GitKrakenCLI/gk"
     run ${pkgs.coreutils}/bin/rm -rf "${config.xdg.dataHome}/uv/python"
   '';
 
