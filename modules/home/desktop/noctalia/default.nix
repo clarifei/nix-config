@@ -65,11 +65,37 @@ let
   '';
 
   templateRoot = "${config.xdg.configHome}/noctalia/templates";
+
+  squareGtkCss = ''
+    @import url("noctalia.css");
+
+    * {
+      border-radius: 0;
+      -gtk-outline-radius: 0;
+    }
+
+    decoration,
+    window,
+    dialog,
+    popover,
+    popover.background {
+      border-radius: 0;
+      box-shadow: none;
+    }
+  '';
 in
 {
   imports = [ noctalia.homeModules.default ];
 
   xdg.configFile = {
+    "gtk-3.0/gtk.css" = {
+      text = squareGtkCss;
+      force = true;
+    };
+    "gtk-4.0/gtk.css" = {
+      text = squareGtkCss;
+      force = true;
+    };
     "noctalia/templates/terminal-sequences".text = terminalSequences;
     "noctalia/templates/labwc".text = labwcTheme;
   };
