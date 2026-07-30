@@ -6,7 +6,7 @@
 
 let
   binary = "codex-x86_64-unknown-linux-musl";
-  version = "0.145.0";
+  version = "0.146.0";
 in
 stdenvNoCC.mkDerivation {
   pname = "codex";
@@ -14,7 +14,7 @@ stdenvNoCC.mkDerivation {
 
   src = fetchurl {
     url = "https://github.com/openai/codex/releases/download/rust-v${version}/${binary}.tar.gz";
-    hash = "sha256-v68Tybo08q12TkqRbEnPcXeuujKc8PcZ4iJ1ZvyNZio=";
+    hash = "sha256-W6O5QFVDlTCB9mHQhU0mb3biq75R1BNJNVo23nZzd2o=";
   };
 
   dontBuild = true;
