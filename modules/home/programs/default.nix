@@ -23,7 +23,7 @@ in
       fd
       fastfetch
       jq
-      nodejs_latest
+      nodejs_24
       pnpm
       python3
       ripgrep
