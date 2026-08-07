@@ -6,7 +6,7 @@
 
 let
   binary = "codex-x86_64-unknown-linux-musl";
-  version = "0.147.0";
+  version = "0.146.0";
 in
 stdenvNoCC.mkDerivation {
   pname = "codex";
@@ -14,7 +14,7 @@ stdenvNoCC.mkDerivation {
 
   src = fetchurl {
     url = "https://github.com/openai/codex/releases/download/rust-v${version}/${binary}.tar.gz";
-    hash = "sha256-Akbi53ODTgfw+1JJ7W660S5FkeYI+Me7l91qlpBUTDY=";
+    hash = "sha256-W6O5QFVDlTCB9mHQhU0mb3biq75R1BNJNVo23nZzd2o=";
   };
 
   dontBuild = true;
@@ -23,16 +23,8 @@ stdenvNoCC.mkDerivation {
 
   installPhase = ''
     install -d $out/bin
-
-    tar -xzf "$src" -O "${binary}" > "$out/bin/codex"
-    chmod 755 "$out/bin/codex"
-
-    host_binary="$(tar -tzf "$src" | grep -E '^codex-code-mode-host(-|$)' | head
-    -n1)"
-    test -n "$host_binary"
-
-    tar -xzf "$src" -O "$host_binary" > "$out/bin/codex-code-mode-host"
-    chmod 755 "$out/bin/codex-code-mode-host"
+    tar -xzf $src -O ${binary} > $out/bin/codex
+    chmod 755 $out/bin/codex
   '';
 
   meta = {
