@@ -23,8 +23,16 @@ stdenvNoCC.mkDerivation {
 
   installPhase = ''
     install -d $out/bin
-    tar -xzf $src -O ${binary} > $out/bin/codex
-    chmod 755 $out/bin/codex
+
+    tar -xzf "$src" -O "${binary}" > "$out/bin/codex"
+    chmod 755 "$out/bin/codex"
+
+    host_binary="$(tar -tzf "$src" | grep -E '^codex-code-mode-host(-|$)' | head
+    -n1)"
+    test -n "$host_binary"
+
+    tar -xzf "$src" -O "$host_binary" > "$out/bin/codex-code-mode-host"
+    chmod 755 "$out/bin/codex-code-mode-host"
   '';
 
   meta = {
