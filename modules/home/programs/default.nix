@@ -9,6 +9,7 @@
 let
   codex = pkgs.callPackage ../../../packages/codex { };
   codebaseMemoryMcp = pkgs.callPackage ../../../packages/codebase-memory-mcp { };
+  dbx = pkgs.callPackage ../../../packages/dbx { };
   rtk = pkgs.callPackage ../../../packages/rtk { };
 in
 {
@@ -16,6 +17,7 @@ in
     lib.optionals (pkgs.stdenv.hostPlatform.system == "x86_64-linux") [
       codex
       codebaseMemoryMcp
+      dbx
       rtk
     ]
     ++ (with pkgs; [
