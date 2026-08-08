@@ -1,5 +1,6 @@
 {
   config,
+  dbx,
   host,
   lib,
   pkgs,
@@ -9,7 +10,7 @@
 let
   codex = pkgs.callPackage ../../../packages/codex { };
   codebaseMemoryMcp = pkgs.callPackage ../../../packages/codebase-memory-mcp { };
-  dbx = pkgs.callPackage ../../../packages/dbx { };
+  dbxPackage = pkgs.callPackage ../../../packages/dbx { dbxFlake = dbx; };
   rtk = pkgs.callPackage ../../../packages/rtk { };
 in
 {
@@ -17,7 +18,7 @@ in
     lib.optionals (pkgs.stdenv.hostPlatform.system == "x86_64-linux") [
       codex
       codebaseMemoryMcp
-      dbx
+      dbxPackage
       rtk
     ]
     ++ (with pkgs; [

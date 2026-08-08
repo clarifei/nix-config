@@ -23,6 +23,11 @@
       url = "github:nix-community/home-manager/release-26.05";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    dbx = {
+      url = "github:t8y2/dbx";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -31,6 +36,7 @@
       home-manager,
       nix-cachyos-kernel,
       noctalia,
+      dbx,
       ...
     }:
     let
@@ -46,7 +52,12 @@
         nixpkgs.lib.nixosSystem {
           inherit (host) system;
           specialArgs = {
-            inherit host nix-cachyos-kernel noctalia;
+            inherit
+              dbx
+              host
+              nix-cachyos-kernel
+              noctalia
+              ;
           };
           modules = [
             home-manager.nixosModules.home-manager

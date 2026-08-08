@@ -17,6 +17,18 @@
 
   virtualisation.docker.enable = true;
 
+  services.postgresql = {
+    enable = true;
+    package = pkgs.postgresql_17;
+    ensureDatabases = [ host.username ];
+    ensureUsers = [
+      {
+        name = host.username;
+        ensureDBOwnership = true;
+      }
+    ];
+  };
+
   environment.systemPackages = [ pkgs.docker-compose ];
 
   time.timeZone = "Asia/Jakarta";

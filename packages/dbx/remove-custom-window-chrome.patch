@@ -1,0 +1,60 @@
+diff --git a/apps/desktop/src/components/layout/WindowControls.vue b/apps/desktop/src/components/layout/WindowControls.vue
+--- a/apps/desktop/src/components/layout/WindowControls.vue
++++ b/apps/desktop/src/components/layout/WindowControls.vue
+@@ -1,28 +1,3 @@
+-<script setup lang="ts">
+-import { Minus, Square, Copy, X } from "@lucide/vue";
+-
+-defineProps<{
+-  isMaximized: boolean;
+-}>();
+-
+-const emit = defineEmits<{
+-  minimize: [];
+-  "toggle-maximize": [];
+-  close: [];
+-}>();
+-</script>
+-
+ <template>
+-  <div class="flex items-stretch -mr-2 ml-1">
+-    <button class="inline-flex items-center justify-center w-11.5 h-10 hover:bg-foreground/10 transition-colors" @click="emit('minimize')">
+-      <Minus class="h-4 w-4" />
+-    </button>
+-    <button class="inline-flex items-center justify-center w-11.5 h-10 hover:bg-foreground/10 transition-colors" @click="emit('toggle-maximize')">
+-      <Copy v-if="isMaximized" class="h-3.5 w-3.5" />
+-      <Square v-else class="h-3.5 w-3.5" />
+-    </button>
+-    <button class="inline-flex items-center justify-center w-11.5 h-10 hover:bg-red-500 hover:text-white transition-colors" @click="emit('close')">
+-      <X class="h-4 w-4" />
+-    </button>
+-  </div>
++  <div class="hidden" aria-hidden="true" />
+ </template>
+diff --git a/apps/desktop/src/composables/useWindowControls.ts b/apps/desktop/src/composables/useWindowControls.ts
+--- a/apps/desktop/src/composables/useWindowControls.ts
++++ b/apps/desktop/src/composables/useWindowControls.ts
+@@ -36,9 +36,7 @@ export function shouldShowWindowControls(isMac: boolean, isDesktop = true): boole
+ }
+ 
+-export function shouldDrawDesktopWindowFrame(isMac: boolean, isDesktop = true, isWindows = false): boolean {
+-  // Windows frameless+shadow windows already get a DWM 1px border on all sides.
+-  // An extra CSS top hairline stacks on that edge and no longer matches left/right/bottom.
+-  return isDesktop && !isMac && !isWindows;
++export function shouldDrawDesktopWindowFrame(_isMac: boolean, _isDesktop = true, _isWindows = false): boolean {
++  return false;
+ }
+ 
+ export function useWindowControls() {
+diff --git a/src-tauri/tauri.conf.json b/src-tauri/tauri.conf.json
+--- a/src-tauri/tauri.conf.json
++++ b/src-tauri/tauri.conf.json
+@@ -19,7 +19,8 @@
+         "minHeight": 600,
+         "resizable": true,
+         "fullscreen": false,
+         "visible": false,
++        "decorations": false,
+         "titleBarStyle": "Overlay",
+         "trafficLightPosition": {
+           "x": 16,

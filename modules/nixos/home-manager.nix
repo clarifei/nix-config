@@ -1,4 +1,9 @@
-{ host, noctalia, ... }:
+{
+  dbx,
+  host,
+  noctalia,
+  ...
+}:
 
 {
   home-manager = {
@@ -6,7 +11,7 @@
     useUserPackages = true;
     backupFileExtension = "hm-backup";
     extraSpecialArgs = {
-      inherit host noctalia;
+      inherit dbx host noctalia;
     };
     users.${host.username} = import ../home;
   };
