@@ -20,6 +20,7 @@ in
     ]
     ++ (with pkgs; [
       cargo
+      deno
       fd
       fastfetch
       jq
