@@ -11,6 +11,28 @@ let
   codex = pkgs.callPackage ../../../packages/codex { };
   codebaseMemoryMcp = pkgs.callPackage ../../../packages/codebase-memory-mcp { };
   dbxPackage = pkgs.callPackage ../../../packages/dbx { dbxFlake = dbx; };
+  denoPackage = pkgs.stdenv.mkDerivation {
+    pname = "deno";
+    version = "2.9.5";
+
+    src = pkgs.fetchurl {
+      url = "https://github.com/denoland/deno/releases/download/v2.9.5/deno-x86_64-unknown-linux-gnu.zip";
+      hash = "sha256-iwEKOxpKAYimfNuKeic0iypQGveK7H/HTyrOFnNo1TA=";
+    };
+
+    dontUnpack = true;
+    nativeBuildInputs = with pkgs; [
+      autoPatchelfHook
+      unzip
+    ];
+    buildInputs = [ pkgs.stdenv.cc.cc.lib ];
+
+    installPhase = ''
+      mkdir -p $out/bin
+      unzip $src -d $out/bin
+      chmod +x $out/bin/deno
+    '';
+  };
   rtk = pkgs.callPackage ../../../packages/rtk { };
 in
 {
@@ -19,11 +41,11 @@ in
       codex
       codebaseMemoryMcp
       dbxPackage
+      denoPackage
       rtk
     ]
     ++ (with pkgs; [
       cargo
-      deno
       fd
       fastfetch
       jq
