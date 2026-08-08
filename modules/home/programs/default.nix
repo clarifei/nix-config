@@ -24,6 +24,7 @@ in
       rtk
     ]
     ++ (with pkgs; [
+      bun
       cargo
       fd
       fastfetch
